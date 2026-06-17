@@ -6,12 +6,12 @@ import asyncio
 import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..clients import OllamaClient
 from ..config import get_settings
-from ..gpu import vram_stats
+from ..gpu import empty_cache, vram_stats
 from ..logging_setup import get_logger
 from ..orchestrator import Orchestrator
 from ..pipeline.export import (
@@ -85,9 +85,14 @@ async def run_pipeline(sid: str) -> dict:
         raise HTTPException(404, "Sesja nie istnieje")
     hub._cancelled.discard(sid)  # clear any previous cancel flag
     cb = await _progress_publisher(sid)
+    client = OllamaClient()
 
     async def _job() -> None:
         await orchestrator.run_all(session, cb)
+        # After pipeline: free GPU cache and unload Ollama model from VRAM.
+        empty_cache()
+        await client.unload()
+        log.info("pipeline.finished_vram_cleared", sid=sid, **vram_stats())
 
     asyncio.create_task(_job())
     return {"status": "running"}
@@ -200,23 +205,69 @@ class ChatRequest(BaseModel):
     temperature: float = 0.2
 
 
+def _build_chat_system(context_chunks: list[dict]) -> str:
+    if context_chunks:
+        context_block = "\n\n".join(
+            "[{n}] [{spk} @ {t:.0f}s] {txt}".format(
+                n=i + 1, spk=c.get("speaker", "?"),
+                t=float(c.get("start", 0)), txt=c.get("text", "")
+            )
+            for i, c in enumerate(context_chunks)
+        )
+        return (
+            "Jesteś asystentem analizującym nagranie rozmowy. Odpowiadaj po polsku, "
+            "wyłącznie na podstawie dostarczonych fragmentów transkryptu. "
+            "Cytuj fragmenty w formacie [nr] [ROZMÓWCA, mm:ss] jako dowód. "
+            "Jeśli brak informacji w transkrypcie, powiedz to wprost.\n\n"
+            f"FRAGMENTY TRANSKRYPTU:\n{context_block}"
+        )
+    return (
+        "Jesteś asystentem analizującym nagranie rozmowy. "
+        "Odpowiadaj po polsku na podstawie historii konwersacji."
+    )
+
+
 @router.post("/llm/chat")
 async def chat(req: ChatRequest) -> dict:
-    """RAG-grounded agent chat. The SPA does retrieval client-side and passes the
-    top chunks as ``context``; the model must answer in Polish and cite quotes
-    with [speaker, mm:ss] references."""
+    """RAG-grounded blocking chat (legacy; prefer /llm/chat/stream)."""
     client = OllamaClient()
-    context_block = "\n\n".join(
-        f"[{c.get('speaker','?')} @ {float(c.get('start',0)):.0f}s] {c.get('text','')}"
-        for c in req.context
-    )
-    system = (
-        "Jesteś asystentem analizującym nagranie rozmowy. Odpowiadaj po polsku, "
-        "wyłącznie na podstawie dostarczonych fragmentów transkryptu. Zawsze "
-        "cytuj fragmenty w formacie [ROZMÓWCA, mm:ss] jako dowód. Jeśli brak "
-        "informacji w transkrypcie, powiedz to wprost.\n\n"
-        f"FRAGMENTY:\n{context_block}"
-    )
+    system = _build_chat_system(req.context)
     messages = [{"role": "system", "content": system}, *req.messages]
     answer = await client.chat(messages, temperature=req.temperature)
     return {"answer": answer}
+
+
+@router.post("/llm/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """Streaming SSE chat. Yields ``data: {"chunk": "..."}`` lines.
+    Special events: ``{"thinking": true}`` when model is reasoning,
+    ``{"thinking": false}`` when reasoning ends.
+    Terminated by ``data: [DONE]``."""
+    client = OllamaClient()
+    system = _build_chat_system(req.context)
+    messages = [{"role": "system", "content": system}, *req.messages]
+
+    async def event_stream():
+        try:
+            async for chunk in client.stream_chat(messages, temperature=req.temperature):
+                if chunk == "\x00THINKING\x00":
+                    yield f"data: {json.dumps({'thinking': True})}\n\n"
+                elif chunk == "\x00DONE_THINKING\x00":
+                    yield f"data: {json.dumps({'thinking': False})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+        except Exception as exc:
+            log.warning("chat_stream.error", error=str(exc))
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

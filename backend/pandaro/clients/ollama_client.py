@@ -1,11 +1,14 @@
-"""Async Ollama client for LLM generation and embeddings (runs on the host).
+"""Async Ollama client: LLM generation (streaming + blocking) and embeddings.
 
 The browser cannot reach the GPU, so all LLM/embedding traffic is proxied
-through the backend to Ollama. We pass ``keep_alive`` so Gemma is unloaded from
-VRAM when the heavy ASR/diarization phases need the card.
+through the backend to Ollama. We pass ``keep_alive=0`` so models are
+unloaded from VRAM immediately after each call, freeing memory for ASR/etc.
 """
 
 from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -24,7 +27,7 @@ class OllamaClient:
         self.s = settings or get_settings()
         self._resolved_llm: str | None = None
 
-    # --- introspection ----------------------------------------------------
+    # --- introspection --------------------------------------------------------
     async def list_models(self) -> list[str]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(f"{self.s.ollama_host}/api/tags")
@@ -35,17 +38,16 @@ class OllamaClient:
         try:
             models = await self.list_models()
             return {"ok": True, "models": models, "llm": await self.resolve_llm_model()}
-        except Exception as exc:  # pragma: no cover - network dependent
+        except Exception as exc:  # pragma: no cover
             log.warning("ollama.health_failed", error=str(exc))
             return {"ok": False, "error": "Ollama jest nieosiągalna."}
 
     async def resolve_llm_model(self) -> str:
-        """Use the configured LLM model, falling back if its tag is absent.
+        """Return the actual Ollama tag for the configured LLM model.
 
-        Honours the user's request for "gemma4" but degrades to gemma3:27b when
-        the newer tag is not pulled on the host Ollama. Returns the *actual*
-        Ollama model name (e.g. "gemma4:31b") rather than the bare tag so that
-        Ollama accepts it without a 404.
+        Matches by exact tag first, then by base name (e.g. ``gemma4:31b``
+        satisfies config ``gemma4``). Falls back to ``llm_model_fallback``
+        if neither matches.
         """
         if self._resolved_llm:
             return self._resolved_llm
@@ -57,8 +59,6 @@ class OllamaClient:
             return wanted
 
         def find(tag: str) -> str | None:
-            """Return the first available model that exactly matches *tag* or
-            shares the same base name (e.g. ``gemma4`` → ``gemma4:31b``)."""
             if tag in available:
                 return tag
             base = tag.split(":")[0]
@@ -73,7 +73,7 @@ class OllamaClient:
             log.warning("ollama.llm_fallback", wanted=wanted, using=resolved)
         return self._resolved_llm
 
-    # --- generation -------------------------------------------------------
+    # --- blocking generation --------------------------------------------------
     async def generate(
         self,
         prompt: str,
@@ -83,7 +83,7 @@ class OllamaClient:
         model: str | None = None,
     ) -> str:
         model = model or await self.resolve_llm_model()
-        payload = {
+        payload: dict = {
             "model": model,
             "prompt": prompt,
             "stream": False,
@@ -98,6 +98,7 @@ class OllamaClient:
                 raise OllamaError(f"generate failed: {r.status_code} {r.text}")
             return r.json().get("response", "").strip()
 
+    # --- blocking chat --------------------------------------------------------
     async def chat(
         self,
         messages: list[dict],
@@ -119,18 +120,75 @@ class OllamaClient:
                 raise OllamaError(f"chat failed: {r.status_code} {r.text}")
             return r.json().get("message", {}).get("content", "").strip()
 
-    # --- embeddings -------------------------------------------------------
+    # --- streaming chat -------------------------------------------------------
+    async def stream_chat(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float = 0.2,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        model = model or await self.resolve_llm_model()
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": self.s.ollama_keep_alive,
+            "options": {"temperature": temperature},
+        }
+        async with httpx.AsyncClient(timeout=self.s.ollama_request_timeout_s) as client:
+            async with client.stream(
+                "POST", f"{self.s.ollama_host}/api/chat", json=payload
+            ) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise OllamaError(f"stream_chat failed: {resp.status_code} {body.decode()}")
+                thinking = False
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    msg = data.get("message", {})
+                    # Gemma-4 and other thinking models emit reasoning in "thinking"
+                    # before the actual response. Yield a special marker on first
+                    # thinking token so the frontend can show a progress indicator.
+                    if msg.get("thinking"):
+                        if not thinking:
+                            thinking = True
+                            yield "\x00THINKING\x00"  # sentinel for UI
+                        continue
+                    chunk = msg.get("content", "")
+                    if chunk:
+                        if thinking:
+                            thinking = False
+                            yield "\x00DONE_THINKING\x00"  # thinking finished
+                        yield chunk
+
+    # --- embeddings -----------------------------------------------------------
     async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
         model = model or self.s.embedding_model
-        out: list[list[float]] = []
         async with httpx.AsyncClient(timeout=self.s.ollama_request_timeout_s) as client:
-            # Ollama's /api/embed accepts a batch via "input".
             r = await client.post(
                 f"{self.s.ollama_host}/api/embed",
                 json={"model": model, "input": texts, "keep_alive": self.s.ollama_keep_alive},
             )
             if r.status_code != 200:
                 raise OllamaError(f"embed failed: {r.status_code} {r.text}")
-            data = r.json()
-            out = data.get("embeddings") or []
-        return out
+            return r.json().get("embeddings") or []
+
+    # --- VRAM cleanup ---------------------------------------------------------
+    async def unload(self) -> None:
+        """Force Ollama to unload the resident LLM from VRAM (keep_alive=0)."""
+        model = self._resolved_llm or self.s.llm_model
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"{self.s.ollama_host}/api/generate",
+                    json={"model": model, "prompt": "", "keep_alive": "0"},
+                )
+            log.info("ollama.unloaded", model=model)
+        except Exception as exc:
+            log.warning("ollama.unload_failed", model=model, error=str(exc))

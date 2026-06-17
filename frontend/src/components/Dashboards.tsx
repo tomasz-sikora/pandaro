@@ -29,7 +29,7 @@ export function Dashboards({ analysis: a, onRerun }: Props) {
           )}
         </div>
         {a.speakers.length ? (
-          <ul className="speakers-list">
+          <ul className="speaker-list">
             {a.speakers.map((s) => {
               const color = speakerColor(s.speaker);
               return (
@@ -142,10 +142,10 @@ export function Dashboards({ analysis: a, onRerun }: Props) {
       <div className="card">
         <h2>Encje nazwane</h2>
         {a.entities.length ? (
-          <div className="entities-list">
+          <div className="ent-list">
             {a.entities.slice(0, 40).map((e, i) => (
-              <div key={i} className="entity-row">
-                <span className={`entity-type ${e.type}`}>{e.type}</span>
+              <div key={i} className="ent-row">
+                <span className={`ent-type ${e.type}`}>{e.type}</span>
                 <span>{e.text}</span>
                 {e.count > 1 && <span className="hint">×{e.count}</span>}
               </div>

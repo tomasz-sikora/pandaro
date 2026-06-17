@@ -184,13 +184,13 @@ export default function App() {
             <span>{t.icon}</span>
             <span>{t.label}</span>
             {t.badge && (
-              <span className={`badge${t.badge === "…" ? " ok" : ""}`}>{t.badge}</span>
+              <span className={`tab-badge${t.badge === "…" ? " running" : ""}`}>{t.badge}</span>
             )}
           </button>
         ))}
       </nav>
 
-      <div className="tab-content">
+      <div className={`tab-content${activeTab === "chat" ? " no-pad" : ""}`}>
         {activeTab === "upload" && (
           <UploadPanel onStart={start} onImport={importBundle} disabled={busy} />
         )}
@@ -230,15 +230,11 @@ export default function App() {
         )}
 
         {activeTab === "search" && analysis && (
-          <div className="search-layout">
-            <SearchPanel index={ragIndex} onSeek={onSeek} />
-          </div>
+          <SearchPanel index={ragIndex} onSeek={onSeek} analysis={analysis} />
         )}
 
         {activeTab === "chat" && analysis && (
-          <div className="chat-layout">
-            <ChatPanel index={ragIndex} analysis={analysis} />
-          </div>
+          <ChatPanel index={ragIndex} analysis={analysis} />
         )}
       </div>
     </div>

@@ -17,7 +17,7 @@ services:
       # Reach the host's Ollama (LLM + embeddings) from inside the container.
       PANDARO_OLLAMA_HOST: "http://host.docker.internal:11434"
       PANDARO_PORT: "9090"
-      PANDARO_LLM_MODEL: "${PANDARO_LLM_MODEL:-gemma4}"
+      PANDARO_LLM_MODEL: "${PANDARO_LLM_MODEL:-gemma4:31b}"
       PANDARO_LLM_MODEL_FALLBACK: "${PANDARO_LLM_MODEL_FALLBACK:-gemma3:27b}"
       PANDARO_EMBEDDING_MODEL: "${PANDARO_EMBEDDING_MODEL:-bge-m3}"
       PANDARO_DEVICE: "cuda"

@@ -39,7 +39,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
     <div className="upload-layout">
       {/* Drop zone */}
       <div
-        className={`upload-drop${dragging ? " over" : ""}`}
+        className={`drop-zone${dragging ? " over" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
@@ -61,7 +61,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
       </div>
 
       {file && (
-        <div className="file-selected">
+        <div className="file-chip">
           🎵 <strong>{file.name}</strong>{" "}
           <span className="muted">({(file.size / 1024 / 1024).toFixed(1)} MB)</span>
         </div>
@@ -76,8 +76,8 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
           </button>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
+        <div className="form-grid">
+          <div className="form-field">
             <label>Język nagrania</label>
             <select
               value={preset.expected_language}
@@ -90,7 +90,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
               <option value="de">Niemiecki</option>
             </select>
           </div>
-          <div className="form-group">
+          <div className="form-field">
             <label>Styl podsumowania</label>
             <select
               value={preset.summary_style}
@@ -104,9 +104,9 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
         </div>
 
         {showPreset && (
-          <div className="preset-form" style={{ marginTop: 12 }}>
-            <div className="form-row">
-              <div className="form-group">
+          <div className="card" style={{ marginTop: 12 }}>
+            <div className="form-grid">
+              <div className="form-field">
                 <label>Liczba rozmówców (opcjonalnie)</label>
                 <input
                   type="number"
@@ -122,7 +122,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
                   }
                 />
               </div>
-              <div className="form-group">
+              <div className="form-field">
                 <label>Kontekst / dziedzina</label>
                 <input
                   type="text"
@@ -133,7 +133,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
               </div>
             </div>
 
-            <div className="form-group">
+            <div className="form-field">
               <label>Słownik własny (nazwiska, terminy — przecinki)</label>
               <input
                 type="text"
@@ -147,7 +147,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
               />
             </div>
 
-            <div className="form-group">
+            <div className="form-field">
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                 <input
                   type="checkbox"
@@ -161,7 +161,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
               </div>
             </div>
 
-            <div className="form-group">
+            <div className="form-field">
               <label>Aktywne etapy analizy</label>
               <div className="phase-toggles">
                 {OPTIONAL_PHASES.map((ph) => {
@@ -169,7 +169,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
                   return (
                     <label
                       key={ph}
-                      className={`phase-toggle${on ? " active" : ""}`}
+                      className={`phase-toggle${on ? " on" : ""}`}
                     >
                       <input type="checkbox" checked={on} onChange={() => togglePhase(ph)} />
                       {PHASE_LABELS[ph] ?? ph}
@@ -183,7 +183,7 @@ export function UploadPanel({ onStart, onImport, disabled }: Props) {
       </div>
 
       {/* Actions */}
-      <div className="upload-actions">
+      <div className="upload-cta">
         <button
           className="primary"
           disabled={!file || disabled}

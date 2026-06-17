@@ -18,7 +18,7 @@ def test_config_endpoint():
     r = client.get("/api/config")
     assert r.status_code == 200
     body = r.json()
-    assert body["llm_model"] == "gemma4"
+    assert body["llm_model"] == "gemma4:31b"
     assert "asr" in body["phases"]
 
 

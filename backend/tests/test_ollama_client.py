@@ -11,7 +11,7 @@ class FakeSettings:
     """Minimal settings stub for unit testing."""
 
     ollama_host = "http://localhost:11434"
-    llm_model = "gemma4"
+    llm_model = "gemma4:31b"
     llm_model_fallback = "gemma3:27b"
     embedding_model = "bge-m3"
     ollama_keep_alive = "0"
@@ -32,8 +32,8 @@ class TestModelResolution:
 
     @pytest.mark.asyncio
     async def test_exact_match_returned_as_is(self):
-        c = self._client(["gemma4", "bge-m3"])
-        assert await c.resolve_llm_model() == "gemma4"
+        c = self._client(["gemma4:31b", "bge-m3"])
+        assert await c.resolve_llm_model() == "gemma4:31b"
 
     @pytest.mark.asyncio
     async def test_base_name_match_returns_full_tag(self):
@@ -63,7 +63,7 @@ class TestModelResolution:
             raise ConnectionError("Ollama unreachable")
 
         c.list_models = raise_error  # type: ignore[method-assign]
-        assert await c.resolve_llm_model() == "gemma4"
+        assert await c.resolve_llm_model() == "gemma4:31b"
 
     @pytest.mark.asyncio
     async def test_resolution_is_cached(self):

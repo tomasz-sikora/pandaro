@@ -22,12 +22,12 @@ export function Toolbar({ sessionId, analysis, onClear, busy }: Props) {
       <div className="topbar-spacer" />
       <div className="topbar-actions">
         {conf != null && (
-          <span className={`conf-badge${confClass}`} title="Średnia pewność rozpoznania mowy">
+          <span className={`badge-pill${confClass}`} title="Średnia pewność rozpoznania mowy">
             ASR: {Math.round(conf * 100)}%
           </span>
         )}
         {analysis?.media_filename && (
-          <span className="conf-badge" title="Plik nagrania">
+          <span className="badge-pill" title="Plik nagrania">
             📁 {analysis.media_filename}
           </span>
         )}

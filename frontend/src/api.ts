@@ -83,6 +83,50 @@ export const api = {
     return data.answer ?? "";
   },
 
+  /** Streaming chat — yields text chunks via SSE. Calls onThinking(true/false) for thinking models. */
+  streamChat(
+    messages: { role: string; content: string }[],
+    context: { text: string; speaker: string | null; start: number; end: number }[],
+    onChunk: (chunk: string) => void,
+    signal: AbortSignal,
+    onThinking?: (thinking: boolean) => void,
+  ): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const res = await fetch(`${BASE}/api/llm/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages, context }),
+          signal,
+        });
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6);
+            if (raw === "[DONE]") { resolve(); return; }
+            const parsed = JSON.parse(raw);
+            if (parsed.error) throw new Error(parsed.error);
+            if (parsed.thinking !== undefined) onThinking?.(parsed.thinking);
+            else if (parsed.chunk) onChunk(parsed.chunk);
+          }
+        }
+        resolve();
+      } catch (e: any) {
+        if (e?.name === "AbortError") resolve();
+        else reject(e);
+      }
+    });
+  },
+
   async importBundle(file: File): Promise<{ session_id: string; analysis: Analysis }> {
     const fd = new FormData();
     fd.append("file", file);

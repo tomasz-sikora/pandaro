@@ -102,7 +102,7 @@ export function ProgressPanel({ analysis, onRerun, onCancel, busy }: Props) {
                 </div>
                 <div className="phase-bar-wrap">
                   <div
-                    className="phase-bar-fill"
+                    className="phase-bar"
                     style={{ width: `${pct}%` }}
                   />
                 </div>

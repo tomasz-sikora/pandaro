@@ -58,7 +58,7 @@ export function TranscriptView({ analysis, currentTime, onSeek }: Props) {
             >
               <span className="seg-time">{formatTime(seg.start)}</span>
               {seg.speaker && (
-                <span className="seg-speaker-dot" style={{ background: color }} title={seg.speaker} />
+                <span className="seg-dot" style={{ background: color }} title={seg.speaker} />
               )}
               <div className="seg-body">
                 {seg.speaker && (
@@ -71,7 +71,7 @@ export function TranscriptView({ analysis, currentTime, onSeek }: Props) {
                     ? seg.words.map((w, i) => (
                         <span
                           key={i}
-                          className={`word${w.low_confidence ? " low-conf" : ""}`}
+                          className={`word${w.low_confidence ? " lc" : ""}`}
                           title={w.low_confidence ? `Pewność: ${Math.round(w.confidence * 100)}%` : undefined}
                         >
                           {w.text}{" "}

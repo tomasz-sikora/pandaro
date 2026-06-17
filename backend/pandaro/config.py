@@ -31,8 +31,8 @@ class Settings(BaseSettings):
 
     # --- Ollama (LLM + embeddings live on the host) -----------------------
     ollama_host: str = "http://localhost:11434"
-    # User asked for "Gemma 4"; falls back to gemma3:27b if that tag is absent.
-    llm_model: str = "gemma4"
+    # User asked for "Gemma 4"; direct tag so Ollama resolves it immediately.
+    llm_model: str = "gemma4:31b"
     llm_model_fallback: str = "gemma3:27b"
     embedding_model: str = "bge-m3"
     # keep_alive passed to Ollama; "0" unloads immediately to free VRAM.
