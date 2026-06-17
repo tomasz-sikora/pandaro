@@ -43,7 +43,9 @@ class OllamaClient:
         """Use the configured LLM model, falling back if its tag is absent.
 
         Honours the user's request for "gemma4" but degrades to gemma3:27b when
-        the newer tag is not pulled on the host Ollama.
+        the newer tag is not pulled on the host Ollama. Returns the *actual*
+        Ollama model name (e.g. "gemma4:31b") rather than the bare tag so that
+        Ollama accepts it without a 404.
         """
         if self._resolved_llm:
             return self._resolved_llm
@@ -54,13 +56,21 @@ class OllamaClient:
             self._resolved_llm = wanted
             return wanted
 
-        def has(tag: str) -> bool:
+        def find(tag: str) -> str | None:
+            """Return the first available model that exactly matches *tag* or
+            shares the same base name (e.g. ``gemma4`` → ``gemma4:31b``)."""
+            if tag in available:
+                return tag
             base = tag.split(":")[0]
-            return any(m == tag or m.split(":")[0] == base for m in available)
+            for m in available:
+                if m.split(":")[0] == base:
+                    return m
+            return None
 
-        self._resolved_llm = wanted if has(wanted) else self.s.llm_model_fallback
-        if self._resolved_llm != wanted:
-            log.warning("ollama.llm_fallback", wanted=wanted, using=self._resolved_llm)
+        resolved = find(wanted) or find(self.s.llm_model_fallback) or wanted
+        self._resolved_llm = resolved
+        if resolved != wanted:
+            log.warning("ollama.llm_fallback", wanted=wanted, using=resolved)
         return self._resolved_llm
 
     # --- generation -------------------------------------------------------

@@ -31,7 +31,6 @@ export function registerEphemeralWipe(getSessionId: () => string | null): () => 
 export async function wipeBrowserStorage(): Promise<void> {
   try {
     if (indexedDB && "databases" in indexedDB) {
-      // @ts-expect-error databases() nie jest jeszcze w typach TS
       const dbs = (await indexedDB.databases()) as { name?: string }[];
       for (const d of dbs) if (d.name) indexedDB.deleteDatabase(d.name);
     }
