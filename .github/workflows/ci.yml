@@ -121,18 +121,18 @@ jobs:
         run: |
           docker run --rm -d \
             --name pandaro-ci \
-            -p 8090:8080 \
+            -p 9090:9090 \
             -e PANDARO_ASR_BACKEND=stub \
             -e PANDARO_OLLAMA_HOST=http://localhost:11434 \
             pandaro:ci-check
           # Wait for startup
           for i in $(seq 1 15); do
-            if curl -sf http://localhost:8090/api/config >/dev/null 2>&1; then
+            if curl -sf http://localhost:9090/api/config >/dev/null 2>&1; then
               echo "✓ Container started successfully"
               break
             fi
             echo "Waiting for container... ($i/15)"
             sleep 2
           done
-          curl -sf http://localhost:8090/api/config | python3 -m json.tool
+          curl -sf http://localhost:9090/api/config | python3 -m json.tool
           docker stop pandaro-ci

@@ -75,7 +75,7 @@ jobs:
             export HF_TOKEN=hf_...
             docker run -d \
               --gpus all \
-              -p 8080:8080 \
+              -p 9090:9090 \
               --add-host host.docker.internal:host-gateway \
               -e PANDARO_OLLAMA_HOST=http://host.docker.internal:11434 \
               -e HF_TOKEN=$HF_TOKEN \

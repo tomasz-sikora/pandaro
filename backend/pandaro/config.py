@@ -22,8 +22,8 @@ class Settings(BaseSettings):
 
     # --- Server -----------------------------------------------------------
     host: str = "0.0.0.0"
-    port: int = 8080
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8080"])
+    port: int = 9090
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:9090"])
     # Directory containing the built SPA (index.html + assets). Optional in dev.
     frontend_dist: str = "frontend/dist"
     # Max upload size in megabytes (2h recordings can be large).

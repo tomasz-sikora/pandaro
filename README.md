@@ -6,7 +6,7 @@ meeting). Transkrypcja (Whisper large‑v3), diaryzacja rozmówców, analiza gł
 tłumaczenie (UK/RU → PL), hierarchiczne podsumowanie oraz **hybrydowy RAG**
 (odporny na warianty transliteracji cyrylicy) z czatem agenta i interpreterem
 kodu Pyodide. Interfejs jest w języku polskim i działa w przeglądarce Chrome na
-`http://localhost:8080`.
+`http://localhost:9090`.
 
 > **Prywatność / efemeryczność:** stan analizy żyje **wyłącznie w karcie
 > przeglądarki**. Zamknięcie karty lub przycisk **„Wyczyść”** kasuje wszystko;
@@ -75,7 +75,7 @@ export HF_TOKEN=hf_...                # używany jako build-secret (nie trafia d
 docker compose up --build
 ```
 
-Otwórz **http://localhost:8080** w Chrome.
+Otwórz **http://localhost:9090** w Chrome.
 
 - Modele HF są **wstępnie pobierane podczas budowy** (`docker/preload_models.py`)
   i trzymane w wolumenie `pandaro-cache` (`HF_HOME`), więc nie są pobierane
@@ -101,7 +101,7 @@ Tryb `PANDARO_LOW_VRAM=true` włącza int8 i agresywny offload.
 cd backend
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt -e .
-PANDARO_ASR_BACKEND=stub python -m pandaro.main      # API na :8080
+PANDARO_ASR_BACKEND=stub python -m pandaro.main      # API na :9090
 # testy + lint:
 pip install -e ".[dev]" && pytest -q && ruff check .
 ```
@@ -114,7 +114,7 @@ pip install -e ".[dev]" && pytest -q && ruff check .
 ```bash
 cd frontend
 npm install
-npm run dev        # http://localhost:5173, proxy /api → :8080
+npm run dev        # http://localhost:5173, proxy /api → :9090
 npm run build      # produkcyjny build → frontend/dist (serwowany przez backend)
 npm run typecheck  # weryfikacja typów TypeScript
 ```
@@ -139,7 +139,7 @@ cd backend
 PANDARO_ASR_BACKEND=faster-whisper PANDARO_DEVICE=cuda python -m pandaro.main
 
 # Prześlij nagranie przez API
-curl -X POST http://localhost:8080/api/sessions \
+curl -X POST http://localhost:9090/api/sessions \
   -F "file=@/tmp/test_clip.wav" \
   -F 'preset={"translate":false}' | python3 -m json.tool
 ```
@@ -172,7 +172,7 @@ docker pull ghcr.io/tomasz-sikora/pandaro:latest
 # Uruchomienie (wymaga hosta Ollama na porcie 11434)
 docker run -d \
   --gpus all \
-  -p 8080:8080 \
+  -p 9090:9090 \
   --add-host host.docker.internal:host-gateway \
   -e PANDARO_OLLAMA_HOST=http://host.docker.internal:11434 \
   -e HF_TOKEN=$HF_TOKEN \

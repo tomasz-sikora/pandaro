@@ -1,4 +1,4 @@
-"""Entry point: ``python -m pandaro.main`` runs the API server on port 8080."""
+"""Entry point: ``python -m pandaro.main`` runs the API server on port 9090."""
 
 from __future__ import annotations
 

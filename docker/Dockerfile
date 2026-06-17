@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------------------
 # Pandaro — multi-stage image
 #   stage 1 (web):  build the Polish SPA with Vite → /frontend/dist
-#   stage 2 (app):  CUDA runtime + Python backend, serves the built SPA on :8080
+#   stage 2 (app):  CUDA runtime + Python backend, serves the built SPA on :9090
 # ----------------------------------------------------------------------------
 
 # ---- stage 1: frontend build ----------------------------------------------
@@ -58,7 +58,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # 3) Backend source.
 COPY backend/ ./backend/
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -e ./backend
+    pip install ./backend
 
 # 4) Built SPA from stage 1.
 COPY --from=web /frontend/dist ./frontend/dist
@@ -76,9 +76,9 @@ RUN useradd -m -u 1000 pandaro && mkdir -p /cache && chown -R pandaro:pandaro /c
 USER pandaro
 
 WORKDIR /app/backend
-EXPOSE 8080
+EXPOSE 9090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://localhost:8080/api/health || exit 1
+    CMD curl -fsS http://localhost:9090/api/health || exit 1
 
 CMD ["python", "-m", "pandaro.main"]

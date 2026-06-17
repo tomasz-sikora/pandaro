@@ -14,7 +14,7 @@ instructions.
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 pip install -e ".[dev]"
-PANDARO_ASR_BACKEND=stub python -m pandaro.main   # serves on :8080
+PANDARO_ASR_BACKEND=stub python -m pandaro.main   # serves on :9090
 pytest -q
 ```
 
