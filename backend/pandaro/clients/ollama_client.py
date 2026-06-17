@@ -36,7 +36,8 @@ class OllamaClient:
             models = await self.list_models()
             return {"ok": True, "models": models, "llm": await self.resolve_llm_model()}
         except Exception as exc:  # pragma: no cover - network dependent
-            return {"ok": False, "error": str(exc)}
+            log.warning("ollama.health_failed", error=str(exc))
+            return {"ok": False, "error": "Ollama jest nieosiągalna."}
 
     async def resolve_llm_model(self) -> str:
         """Use the configured LLM model, falling back if its tag is absent.
