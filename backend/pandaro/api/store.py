@@ -1,10 +1,3 @@
-"""In-memory, ephemeral session store + per-session progress event hub.
-
-Nothing here is persisted to disk beyond the uploaded audio in a temp dir, which
-is deleted when the session is cleared. This is the server-side half of the
-"analysis is ephemeral" requirement; the browser holds the canonical state.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +21,7 @@ class SessionHub:
         self._sessions: dict[str, Session] = {}
         self._workdirs: dict[str, str] = {}
         self._queues: dict[str, list[asyncio.Queue]] = {}
+        self._cancelled: set[str] = set()
 
     # --- lifecycle --------------------------------------------------------
     def create(self, audio_bytes: bytes, filename: str, preset: Preset) -> Session:
@@ -41,6 +35,7 @@ class SessionHub:
         session = Session(sid, audio_path, preset, filename)
         self._sessions[sid] = session
         self._queues[sid] = []
+        self._cancelled.discard(sid)
         log.info("session.create", sid=sid, filename=filename, bytes=len(audio_bytes))
         return session
 
@@ -51,15 +46,29 @@ class SessionHub:
         session.analysis = analysis
         self._sessions[sid] = session
         self._queues[sid] = []
+        self._cancelled.discard(sid)
         return session
 
     def get(self, sid: str) -> Session | None:
         return self._sessions.get(sid)
 
+    def cancel(self, sid: str) -> bool:
+        """Signal that the running pipeline for *sid* should stop after the
+        current phase. Returns True if the session exists."""
+        if sid not in self._sessions:
+            return False
+        self._cancelled.add(sid)
+        log.info("session.cancel", sid=sid)
+        return True
+
+    def is_cancelled(self, sid: str) -> bool:
+        return sid in self._cancelled
+
     def clear(self, sid: str) -> bool:
         """Wipe a session and its temp files (the 'Wyczyść' button)."""
         session = self._sessions.pop(sid, None)
         self._queues.pop(sid, None)
+        self._cancelled.discard(sid)
         workdir = self._workdirs.pop(sid, None)
         if workdir:
             with contextlib.suppress(Exception):

@@ -66,6 +66,12 @@ export class RagIndex {
     return this.docs.length;
   }
 
+  clear(): void {
+    this.docs = [];
+    this.df.clear();
+    this.avgLen = 0;
+  }
+
   // BM25 ranking nad wybranym polem tokenów (leksykalne lub fonetyczne).
   private bm25(queryTokens: string[], field: "lexTokens" | "phonTokens"): number[] {
     const k1 = 1.5;

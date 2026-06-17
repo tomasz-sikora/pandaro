@@ -12,6 +12,8 @@ import { registerEphemeralWipe, wipeBrowserStorage } from "./ephemeral";
 import { RagIndex } from "./rag";
 import type { Analysis, PhaseState, Preset } from "./types";
 
+type Tab = "upload" | "progress" | "transcript" | "analysis" | "search" | "chat";
+
 export default function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -20,6 +22,7 @@ export default function App() {
   const [seekTo, setSeekTo] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("upload");
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const ragIndex = useMemo(() => new RagIndex(), []);
@@ -46,6 +49,7 @@ export default function App() {
     async (file: File, preset: Preset) => {
       setBusy(true);
       setError(null);
+      setActiveTab("progress");
       try {
         setAudioUrl(URL.createObjectURL(file));
         const { session_id, analysis: a } = await api.createSession(
@@ -65,6 +69,7 @@ export default function App() {
         await api.run(session_id);
       } catch (e) {
         setError(String(e));
+        setActiveTab("upload");
       } finally {
         setBusy(false);
       }
@@ -72,16 +77,22 @@ export default function App() {
     [refresh]
   );
 
+  const cancel = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      await api.cancelSession(sessionId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [sessionId]);
+
   const rerun = useCallback(
     async (phase: string) => {
       if (!sessionId) return;
-      setBusy(true);
       try {
         await api.rerunPhase(sessionId, phase);
       } catch (e) {
         setError(String(e));
-      } finally {
-        setBusy(false);
       }
     },
     [sessionId]
@@ -95,6 +106,7 @@ export default function App() {
       setSessionId(session_id);
       setAnalysis(a);
       setAudioUrl(null);
+      setActiveTab("transcript");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -112,42 +124,123 @@ export default function App() {
     setAudioUrl(null);
     setCurrentTime(0);
     setSeekTo(null);
-  }, [sessionId, audioUrl]);
+    setActiveTab("upload");
+    ragIndex.clear();
+  }, [sessionId, audioUrl, ragIndex]);
 
   const onSeek = useCallback((t: number) => {
     setSeekTo(t);
     setCurrentTime(t);
+    setActiveTab("transcript");
   }, []);
+
+  // Count errors in phases
+  const errorCount = analysis
+    ? Object.values(analysis.phases).filter((p) => p.status === "error").length
+    : 0;
+  const runningCount = analysis
+    ? Object.values(analysis.phases).filter((p) => p.status === "running").length
+    : 0;
+  const hasTranscript = (analysis?.transcript.segments.length ?? 0) > 0;
+  const hasResults = hasTranscript || (analysis?.speakers.length ?? 0) > 0;
+
+  const tabs: { id: Tab; label: string; icon: string; disabled?: boolean; badge?: string }[] = [
+    { id: "upload", label: "Nowa analiza", icon: "📤" },
+    ...(analysis
+      ? [
+          {
+            id: "progress" as Tab,
+            label: "Postęp",
+            icon: runningCount > 0 ? "⏳" : "📋",
+            badge: errorCount > 0 ? String(errorCount) : runningCount > 0 ? "…" : undefined,
+          },
+          { id: "transcript" as Tab, label: "Transkrypt", icon: "📝", disabled: !hasTranscript },
+          { id: "analysis" as Tab, label: "Analiza", icon: "📊", disabled: !hasResults },
+          { id: "search" as Tab, label: "Szukaj", icon: "🔍", disabled: !ragIndex.size },
+          { id: "chat" as Tab, label: "Chat", icon: "💬", disabled: !ragIndex.size },
+        ]
+      : []),
+  ];
 
   return (
     <div className="app">
       <Toolbar sessionId={sessionId} analysis={analysis} onClear={clear} busy={busy} />
-      {error && <div className="error-bar">{error}</div>}
 
-      <main className="layout">
-        <section className="col col-left">
+      {error && (
+        <div className="error-bar">
+          <span>⚠ {error}</span>
+          <button className="ghost" onClick={() => setError(null)}>✕</button>
+        </div>
+      )}
+
+      <nav className="tab-nav">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            className={`tab-btn${activeTab === t.id ? " active" : ""}`}
+            onClick={() => setActiveTab(t.id)}
+            disabled={t.disabled}
+          >
+            <span>{t.icon}</span>
+            <span>{t.label}</span>
+            {t.badge && (
+              <span className={`badge${t.badge === "…" ? " ok" : ""}`}>{t.badge}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      <div className="tab-content">
+        {activeTab === "upload" && (
           <UploadPanel onStart={start} onImport={importBundle} disabled={busy} />
-          {analysis && <ProgressPanel analysis={analysis} onRerun={rerun} busy={busy} />}
-          {analysis && <Dashboards analysis={analysis} />}
-        </section>
+        )}
 
-        <section className="col col-center">
-          <Waveform audioUrl={audioUrl} onTime={setCurrentTime} seekTo={seekTo} />
-          {analysis && (
-            <TranscriptView
-              analysis={analysis}
-              audioUrl={audioUrl}
-              currentTime={currentTime}
-              onSeek={onSeek}
-            />
-          )}
-        </section>
+        {activeTab === "progress" && analysis && (
+          <ProgressPanel
+            analysis={analysis}
+            onRerun={rerun}
+            onCancel={cancel}
+            busy={busy}
+          />
+        )}
 
-        <section className="col col-right">
-          {analysis && <SearchPanel index={ragIndex} onSeek={onSeek} />}
-          {analysis && <ChatPanel index={ragIndex} analysis={analysis} />}
-        </section>
-      </main>
+        {activeTab === "transcript" && analysis && (
+          <div className="transcript-layout">
+            <div>
+              <TranscriptView
+                analysis={analysis}
+                audioUrl={audioUrl}
+                currentTime={currentTime}
+                onSeek={onSeek}
+              />
+            </div>
+            <div>
+              <Waveform
+                audioUrl={audioUrl}
+                onTime={setCurrentTime}
+                seekTo={seekTo}
+                currentTime={currentTime}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === "analysis" && analysis && (
+          <Dashboards analysis={analysis} onRerun={rerun} />
+        )}
+
+        {activeTab === "search" && analysis && (
+          <div className="search-layout">
+            <SearchPanel index={ragIndex} onSeek={onSeek} />
+          </div>
+        )}
+
+        {activeTab === "chat" && analysis && (
+          <div className="chat-layout">
+            <ChatPanel index={ragIndex} analysis={analysis} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

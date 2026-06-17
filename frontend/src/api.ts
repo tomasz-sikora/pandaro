@@ -55,6 +55,10 @@ export const api = {
     await fetch(`${BASE}/api/sessions/${sid}`, { method: "DELETE" }).catch(() => {});
   },
 
+  async cancelSession(sid: string): Promise<void> {
+    await fetch(`${BASE}/api/sessions/${sid}/cancel`, { method: "POST" }).catch(() => {});
+  },
+
   async embed(texts: string[]): Promise<number[][]> {
     const body = JSON.stringify({ texts });
     const res = await fetch(`${BASE}/api/embed`, {

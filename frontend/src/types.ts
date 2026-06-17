@@ -103,6 +103,8 @@ export interface PhaseState {
   progress: number;
   message: string | null;
   error: string | null;
+  started_at: number | null;
+  ended_at: number | null;
 }
 
 export interface Preset {

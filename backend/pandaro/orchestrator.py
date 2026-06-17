@@ -65,9 +65,15 @@ class Orchestrator:
 
     # ------------------------------------------------------------------ #
     async def run_all(self, session: Session, on_progress: ProgressCb | None = None) -> Analysis:
+        # Import here to avoid circular import (store → orchestrator → store).
+        from .api.store import hub
+
         preset = session.analysis.preset
         enabled = set(preset.enabled_phases)
         for phase in PHASE_ORDER:
+            if hub.is_cancelled(session.id):
+                log.info("orchestrator.cancelled", sid=session.id, at=phase.value)
+                break
             if phase in (Phase.INGEST, Phase.ASR, Phase.REPORT) or phase in enabled:
                 await self.run_phase(session, phase, on_progress)
             else:

@@ -83,6 +83,7 @@ async def run_pipeline(sid: str) -> dict:
     session = hub.get(sid)
     if not session:
         raise HTTPException(404, "Sesja nie istnieje")
+    hub._cancelled.discard(sid)  # clear any previous cancel flag
     cb = await _progress_publisher(sid)
 
     async def _job() -> None:
@@ -90,6 +91,15 @@ async def run_pipeline(sid: str) -> dict:
 
     asyncio.create_task(_job())
     return {"status": "running"}
+
+
+@router.post("/sessions/{sid}/cancel")
+async def cancel_pipeline(sid: str) -> dict:
+    """Ask the running pipeline to stop after the current phase."""
+    ok = hub.cancel(sid)
+    if not ok:
+        raise HTTPException(404, "Sesja nie istnieje")
+    return {"status": "cancelled"}
 
 
 @router.post("/sessions/{sid}/phases/{phase}")
@@ -101,6 +111,7 @@ async def rerun_phase(sid: str, phase: str) -> dict:
         phase_enum = Phase(phase)
     except ValueError as exc:
         raise HTTPException(400, f"Nieznana faza: {phase}") from exc
+    hub._cancelled.discard(sid)  # clear cancel so re-run can proceed
     cb = await _progress_publisher(sid)
 
     async def _job() -> None:

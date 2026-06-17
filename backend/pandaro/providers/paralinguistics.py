@@ -56,12 +56,9 @@ class AudeeringParalinguistics:  # pragma: no cover - requires GPU + models
         self.s = settings or get_settings()
 
     def available(self) -> bool:
-        try:
-            import transformers  # noqa: F401
-
-            return True
-        except Exception:
-            return False
+        # Implementation not yet complete — stay on stub until real model
+        # loading + inference is wired up.
+        return False
 
     def analyze(self, audio_path: str, turns: list[SpeakerTurn]) -> list[SpeakerProfile]:
         # Real impl: load audeering age/gender + emotion models, run per speaker,
