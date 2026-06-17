@@ -1,0 +1,12 @@
+# Heavy ML/inference stack — installed in the Docker image on the GPU host.
+# Pin loosely here; the Dockerfile installs a CUDA-matched torch wheel first.
+torch
+torchaudio
+faster-whisper>=1.0
+whisperx
+pyannote.audio>=3.1
+transformers>=4.40
+librosa>=0.10
+soundfile
+opensmile
+ctranslate2
