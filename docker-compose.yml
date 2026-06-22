@@ -1,0 +1,102 @@
+services:
+  transcribe:
+    build:
+      context: apps/transcribe
+      dockerfile: Dockerfile
+      # BuildKit is required for --mount=type=cache in Dockerfile.
+      # Modern Docker Compose uses BuildKit by default; set DOCKER_BUILDKIT=1
+      # if you're on an older installation.
+      args:
+        PRELOAD_MODELS: "true"
+        # DOWNLOAD_VIBEVOICE=true bakes VibeVoice weights (~18 GB) into image.
+        # Build time increases significantly; image requires ~20+ GB disk space.
+        # Default: false — weights download on first use via hf_cache volume.
+        DOWNLOAD_VIBEVOICE: ${DOWNLOAD_VIBEVOICE:-false}
+        SKIP_FLASH_ATTN: ${SKIP_FLASH_ATTN:-false}
+        # Pass HF_TOKEN at build time to preload pyannote/speaker-diarization-3.1.
+        # If omitted, pyannote downloads to hf_cache volume on first container start.
+        HF_TOKEN: ${HF_TOKEN:-}
+    restart: unless-stopped
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+      # VibeVoice weights — downloaded on first use if DOWNLOAD_VIBEVOICE=false
+      - DOWNLOAD_VIBEVOICE=${DOWNLOAD_VIBEVOICE:-false}
+      - VIBEVOICE_MODEL=${VIBEVOICE_MODEL:-microsoft/VibeVoice-ASR}
+      - VIBEVOICE_LM=${VIBEVOICE_LM:-Qwen/Qwen2.5-7B}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral-3:14b}
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Point HuggingFace and Torch caches to volume-backed paths
+      - HF_HOME=/app/models/hf
+      - TORCH_HOME=/app/models/torch
+    volumes:
+      # Persist downloaded models across rebuilds and restarts.
+      # VibeVoice-ASR (~18 GB) and Whisper weights are cached here.
+      - hf_cache:/app/models/hf
+      - torch_cache:/app/models/torch
+    expose:
+      - "8000"
+    networks:
+      - internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: ${TRANSCRIBE_START_PERIOD:-300s}
+      retries: 5
+
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+    expose:
+      - "3001"
+    networks:
+      - internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8090}:80"
+    networks:
+      - internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      proxy:
+        condition: service_healthy
+      transcribe:
+        condition: service_healthy
+
+networks:
+  internal:
+    driver: bridge
+
+# Persistent model cache — avoids re-downloading on every rebuild/restart.
+# Whisper large-v3-turbo: ~800 MB  |  VibeVoice-ASR: ~18 GB
+volumes:
+  hf_cache:
+  torch_cache:
