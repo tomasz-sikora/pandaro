@@ -1,4 +1,4 @@
-import type { Segment } from '@heimdall/shared-types'
+import type { Segment } from '@pandaro/shared-types'
 import { computeEnergy } from '../audio/processor'
 
 interface RawChunk {

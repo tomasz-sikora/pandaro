@@ -1,4 +1,4 @@
-import type { Segment, VectorEntry } from '@heimdall/shared-types'
+import type { Segment, VectorEntry } from '@pandaro/shared-types'
 
 export interface TextChunk {
   text: string

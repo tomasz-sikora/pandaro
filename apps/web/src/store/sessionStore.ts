@@ -7,7 +7,7 @@ import type {
   ChatMessage,
   ProcessingStep,
   SpeakerProfile,
-} from '@heimdall/shared-types'
+} from '@pandaro/shared-types'
 
 interface SessionStore {
   session: Session | null

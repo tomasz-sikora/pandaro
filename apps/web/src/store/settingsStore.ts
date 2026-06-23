@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Settings } from '@heimdall/shared-types'
+import type { Settings } from '@pandaro/shared-types'
 
 interface SettingsStore {
   settings: Settings
@@ -27,6 +27,6 @@ export const useSettingsStore = create<SettingsStore>()(
       update: (patch) =>
         set((s) => ({ settings: { ...s.settings, ...patch } })),
     }),
-    { name: 'heimdall-settings' },
+    { name: 'pandaro-settings' },
   ),
 )

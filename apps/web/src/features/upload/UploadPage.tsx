@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Upload, Mic, AlertCircle, Loader2, FileJson } from 'lucide-react'
 import { useSessionStore } from '../../store/sessionStore'
 import { useProcessingPipeline } from '../../hooks/useProcessingPipeline'
-import type { Segment } from '@heimdall/shared-types'
+import type { Segment } from '@pandaro/shared-types'
 
 const ACCEPTED = ['.mp3', '.mp4', '.m4a', '.wav', 'audio/*', 'video/mp4']
 const STEPS = [

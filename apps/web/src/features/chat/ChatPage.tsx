@@ -10,7 +10,7 @@ import type { SearchResult } from '../../lib/rag/vectorStore'
 import { ollamaChat, ollamaEmbed } from '../../lib/llm/ollama'
 import { ragQueryPrompt } from '../../lib/llm/prompts'
 import { speakerDisplayName } from '../../lib/speakerUtils'
-import type { Segment } from '@heimdall/shared-types'
+import type { Segment } from '@pandaro/shared-types'
 
 function fmtTime(s: number) {
   const m = Math.floor(s / 60)
@@ -34,7 +34,7 @@ function TranscriptPreview({
   segments: Segment[]
   anchorTime: number
   onClose: () => void
-  speakerProfiles?: Record<string, import('@heimdall/shared-types').SpeakerProfile>
+  speakerProfiles?: Record<string, import('@pandaro/shared-types').SpeakerProfile>
 }) {
   const anchorRef = useRef<HTMLDivElement>(null)
 

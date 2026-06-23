@@ -1,8 +1,8 @@
-# Heimdall — Service Specification
+# pandaro — Service Specification
 
 ## 1. Concept
 
-Heimdall is a **private, self-hosted audio intelligence platform** for analysing recorded conversations.
+pandaro is a **private, self-hosted audio intelligence platform** for analysing recorded conversations.
 
 A user uploads an audio file and receives, in return, a fully structured analysis: who spoke, what was said, the emotional tone, a Polish translation, extracted entities, a summary, and an interactive Q&A interface grounded in the recording.
 

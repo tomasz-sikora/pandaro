@@ -18,7 +18,7 @@ COPY packages/ ./packages/
 COPY apps/web/  ./apps/web/
 
 # Build
-RUN pnpm --filter @heimdall/web build
+RUN pnpm --filter @pandaro/web build
 
 ## ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM nginx:1.27-alpine AS runtime

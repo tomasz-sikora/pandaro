@@ -15,7 +15,7 @@ COPY tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/proxy/ ./apps/proxy/
 
-RUN pnpm --filter @heimdall/proxy build
+RUN pnpm --filter @pandaro/proxy build
 
 ## ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime

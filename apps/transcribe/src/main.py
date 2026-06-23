@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Help PyTorch avoid VRAM fragmentation when models are swapped
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-app = FastAPI(title="Heimdall Transcription Service", version="2.0.0")
+app = FastAPI(title="pandaro Transcription Service", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,

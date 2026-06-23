@@ -1,5 +1,5 @@
 {
-  "name": "@heimdall/web",
+  "name": "@pandaro/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@heimdall/shared-types": "workspace:*",
+    "@pandaro/shared-types": "workspace:*",
     "@huggingface/transformers": "^3.3.3",
     "lucide-react": "^0.469.0",
     "react": "^18.3.1",

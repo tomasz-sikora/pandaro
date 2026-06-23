@@ -4,5 +4,5 @@ import app from './index.js'
 const port = Number(process.env.PORT ?? 3001)
 
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`Heimdall proxy running on http://localhost:${info.port}`)
+  console.log(`pandaro proxy running on http://localhost:${info.port}`)
 })

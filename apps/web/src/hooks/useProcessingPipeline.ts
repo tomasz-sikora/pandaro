@@ -9,7 +9,7 @@ import {
   summaryPrompt,
   summaryReducePrompt,
 } from '../lib/llm/prompts'
-import type { Segment, SpeakerProfile, AsrEngine } from '@heimdall/shared-types'
+import type { Segment, SpeakerProfile, AsrEngine } from '@pandaro/shared-types'
 
 // Maximum number of chunks to embed in one pass
 const MAX_EMBED_CHUNKS = 300
@@ -149,10 +149,10 @@ function mergeEntities(results: Array<Record<string, string[]>>) {
  * Build RAG embeddings for the given segments using Ollama.
  */
 export async function computeRagEntries(
-  segments: import('@heimdall/shared-types').Segment[],
+  segments: import('@pandaro/shared-types').Segment[],
   cfg: { baseUrl: string; model: string; embeddingModel: string },
   _useOllama?: boolean,
-): Promise<import('@heimdall/shared-types').VectorEntry[]> {
+): Promise<import('@pandaro/shared-types').VectorEntry[]> {
   const chunks = chunkSegments(segments)
   const safeChunks = chunks.slice(0, MAX_EMBED_CHUNKS)
   const chunkTexts = safeChunks.map((c) => c.text)

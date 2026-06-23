@@ -1,4 +1,4 @@
-import type { SpeakerProfile } from '@heimdall/shared-types'
+import type { SpeakerProfile } from '@pandaro/shared-types'
 
 /**
  * Returns the best human-readable label for a speaker:

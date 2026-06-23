@@ -36,7 +36,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@heimdall/shared-types':
+      '@pandaro/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
       '@huggingface/transformers':

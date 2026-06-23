@@ -1,4 +1,4 @@
-# Heimdall – Analiza Nagrań Audio
+# pandaro – Analiza Nagrań Audio
 
 Aplikacja do analizy nagrań audio działająca **w całości w przeglądarce** (transkrypcja Whisper przez WebAssembly), z opcjonalną integracją z Ollama do analizy LLM i RAG.
 
@@ -35,7 +35,7 @@ MP3, MP4, M4A, WAV
 ```bash
 # Sklonuj repozytorium
 git clone <repo-url>
-cd heimdall
+cd pandaro
 
 # Uruchom
 docker compose up --build
@@ -130,7 +130,7 @@ Aplikacja dostępna pod `http://localhost:5173`.
 ## Struktura projektu
 
 ```
-heimdall/
+pandaro/
 ├── apps/
 │   ├── web/          # React SPA (Vite)
 │   └── proxy/        # Hono proxy do Ollamy

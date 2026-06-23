@@ -27,13 +27,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Type check
-        run: pnpm --filter @heimdall/web lint
+        run: pnpm --filter @pandaro/web lint
 
       - name: Build web
-        run: pnpm --filter @heimdall/web build
+        run: pnpm --filter @pandaro/web build
 
       - name: Build proxy
-        run: pnpm --filter @heimdall/proxy build
+        run: pnpm --filter @pandaro/proxy build
 
   docker-build:
     name: Docker Build
@@ -50,7 +50,7 @@ jobs:
           context: .
           file: Dockerfile.web
           push: false
-          tags: heimdall-web:ci
+          tags: pandaro-web:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -60,6 +60,6 @@ jobs:
           context: .
           file: Dockerfile.proxy
           push: false
-          tags: heimdall-proxy:ci
+          tags: pandaro-proxy:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -4,7 +4,7 @@ import { Tag, Users, Building2, MapPin, Calendar, FileText, AlertCircle, UserCir
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useSessionStore } from '../../store/sessionStore'
-import type { SpeakerProfile } from '@heimdall/shared-types'
+import type { SpeakerProfile } from '@pandaro/shared-types'
 
 function Section({
   icon: Icon,

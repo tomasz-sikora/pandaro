@@ -7,7 +7,7 @@ import { VectorStore } from '../../lib/rag/vectorStore'
 import { ollamaEmbed } from '../../lib/llm/ollama'
 import { computeRagEntries } from '../../hooks/useProcessingPipeline'
 import { speakerDisplayName } from '../../lib/speakerUtils'
-import type { Segment } from '@heimdall/shared-types'
+import type { Segment } from '@pandaro/shared-types'
 
 const SPEAKER_COLORS: Record<string, string> = {
   GŁOS_01: 'bg-blue-100 text-blue-800',
@@ -144,7 +144,7 @@ function SegmentWindow({
   segments: Segment[]
   matchIdx: number
   context?: number
-  speakerProfiles?: Record<string, import('@heimdall/shared-types').SpeakerProfile>
+  speakerProfiles?: Record<string, import('@pandaro/shared-types').SpeakerProfile>
 }) {
   const start = Math.max(0, matchIdx - context)
   const end = Math.min(segments.length - 1, matchIdx + context)

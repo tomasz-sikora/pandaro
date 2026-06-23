@@ -1,4 +1,4 @@
-import type { VectorEntry } from '@heimdall/shared-types'
+import type { VectorEntry } from '@pandaro/shared-types'
 
 // ── Math helpers ─────────────────────────────────────────────────────────────
 

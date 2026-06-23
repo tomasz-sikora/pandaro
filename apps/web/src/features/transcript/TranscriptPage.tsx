@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Clock, Users, Download, Play, Pause, Loader2 } from 'lucide-react'
 import { useSessionStore } from '../../store/sessionStore'
 import { speakerDisplayName } from '../../lib/speakerUtils'
-import type { Word } from '@heimdall/shared-types'
+import type { Word } from '@pandaro/shared-types'
 
 const SPEAKER_COLORS: Record<string, string> = {
   GŁOS_01: 'bg-blue-100 text-blue-800',
