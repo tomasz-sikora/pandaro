@@ -28,6 +28,15 @@ services:
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       - AGENT_MEMORY_PATH=/app/data/memories.json
       - HF_TOKEN=${HF_TOKEN:-}
+      # Transcription tuning (see transcriber.py)
+      - WHISPER_CHUNK_MINUTES=${WHISPER_CHUNK_MINUTES:-15}
+      - WHISPER_OVERLAP_SEC=${WHISPER_OVERLAP_SEC:-20}
+      - WHISPER_ADAPTIVE_VAD=${WHISPER_ADAPTIVE_VAD:-1}
+      - WHISPER_IPA_THRESHOLD=${WHISPER_IPA_THRESHOLD:-0.40}
+      - WHISPER_SILENCE_TRIM_SEC=${WHISPER_SILENCE_TRIM_SEC:-2.0}
+      # Agent context management
+      - AGENT_MAX_CTX_SEGMENTS=${AGENT_MAX_CTX_SEGMENTS:-150}
+      - AGENT_LLM_CHUNK_CHARS=${AGENT_LLM_CHUNK_CHARS:-6000}
       # Point HuggingFace and Torch caches to volume-backed paths
       - HF_HOME=/app/models/hf
       - TORCH_HOME=/app/models/torch

@@ -10,6 +10,7 @@ ENV TORCH_HOME=/app/models/torch
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-dev \
     ffmpeg curl git libsndfile1 build-essential \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure python/pip point to python3
@@ -46,24 +47,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install /opt/VibeVoice
 # VibeVoice wheel installs metadata-only; make source importable via PYTHONPATH
 ENV PYTHONPATH=/opt/VibeVoice:${PYTHONPATH}
-
-# Install NVIDIA NeMo ASR toolkit (Nemotron 3.5 ASR engine)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install Cython packaging && \
-    git clone --depth 1 https://github.com/NVIDIA/NeMo.git /opt/NeMo && \
-    pip install \
-        "aistore" "fsspec>=2024.12.0" "huggingface_hub>=0.24" \
-        "cuda-bindings" "numpy>=1.22" "onnx>=1.7.0" "scikit-learn" \
-        "setuptools>=70.0.0" "smart-open" "tensorboard" "text-unidecode" \
-        "torch>=2.6.0" "tqdm>=4.41.0" "wrapt" \
-        "hydra-core>1.3,<=1.3.2" "lightning>2.2.1,<=2.4.0" "omegaconf<=2.3" \
-        "torchmetrics>=0.11.0" "transformers" "wandb" "webdataset>=0.2.86" \
-        "nv_one_logger_core>=2.3.1" "nv_one_logger_training_telemetry>=2.3.1" \
-        "nv_one_logger_pytorch_lightning_integration>=2.3.1" \
-        "braceexpand" "einops" "kaldialign" "lhotse>=1.33.0" \
-        "librosa>=0.10.1" "sacrebleu" "soundfile" "whisper_normalizer" && \
-    pip install /opt/NeMo && \
-    rm -rf /opt/NeMo/.git
 
 # Install app dependencies
 COPY requirements.txt .

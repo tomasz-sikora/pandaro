@@ -98,6 +98,44 @@ class Diarizer:
             except Exception:
                 pass
 
+    def count_speakers(self, audio: np.ndarray, sr: int) -> int:
+        """
+        Count unique speakers directly from pyannote annotation — no chunk assignment.
+
+        This is the correct way to estimate speaker count; calling diarize() with a
+        single dummy chunk always returns 1 because the whole-fragment chunk overlaps
+        with every speaker turn and gets assigned the dominant speaker only.
+        """
+        if self._method != "pyannote" or self._pipeline is None:
+            logger.warning("pyannote not available for speaker counting — returning 2")
+            return 2
+
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            sf.write(f.name, audio, sr)
+            tmp_path = f.name
+
+        try:
+            result = self._pipeline(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        from pyannote.core import Annotation
+        if hasattr(result, "speaker_diarization"):
+            annotation = result.speaker_diarization
+        elif isinstance(result, Annotation):
+            annotation = result
+        else:
+            annotation = result
+
+        speakers = {speaker for _, _, speaker in annotation.itertracks(yield_label=True)}
+        n = max(len(speakers), 1)
+        logger.info("pyannote counted %d unique speaker(s) in %.1fs fragment", n, len(audio) / sr)
+        return n
+
     # ------------------------------------------------------------------
     def diarize(
         self,
@@ -311,21 +349,57 @@ class Diarizer:
             if top_cnt >= max(2, len(neighbours) // 2):
                 chunk["speaker"] = top_sp
 
-        # Pass 5 — Merge micro-gaps between same-speaker runs
-        # If two consecutive same-speaker segments are separated by < 0.25 s of
-        # silence (and the gap is from an empty/missing chunk), extend the first.
+        # Pass 5 — Empty-segment removal
+        # Remove any segment with no transcribed text — these are pyannote turns
+        # that overlap with silence/breath and produce phantom UI segments.
+        # IMPORTANT: do NOT absorb the time-span of empty segments into the previous
+        # one — that would make the next segment appear adjacent and trigger Pass 6 merge
+        # across a different-speaker boundary.
         MIN_GAP = 0.25
         merged: List[Dict[str, Any]] = []
         for chunk in chunks:
-            if (merged
-                    and merged[-1]["speaker"] == chunk["speaker"]
-                    and chunk["start"] - merged[-1]["end"] < MIN_GAP
-                    and not (chunk.get("text") or "").strip()):
-                # Swallow empty bridging chunk
-                merged[-1]["end"] = chunk["end"]
-            else:
-                merged.append(chunk)
+            text = (chunk.get("text") or "").strip()
+            if not text:
+                # Drop the empty chunk — do NOT extend previous segment's end.
+                # Keeping the gap preserves the speaker-boundary information.
+                continue
+            merged.append(chunk)
         chunks = merged
+
+        # Pass 6 — Sentence-fragment merger (same speaker only)
+        # Whisper sometimes splits a continuous sentence into multiple short segments
+        # at VAD micro-silences. Merge consecutive same-speaker fragments that:
+        #   - are close together (gap <= 0.4s)
+        #   - don't exceed 20s combined duration
+        #   - previous segment doesn't end with sentence-final punctuation
+        # This runs AFTER speaker assignment so it never crosses speaker boundaries.
+        import re as _re
+        SENTENCE_END = _re.compile(r'[.!?…;]\s*$')
+        MAX_FRAG_GAP = 0.1    # only merge truly back-to-back fragments (< 100ms gap)
+        MAX_MERGED_DUR = 15.0
+
+        fmerged: List[Dict[str, Any]] = []
+        for chunk in chunks:
+            txt = (chunk.get("text") or "").strip()
+            if not fmerged:
+                fmerged.append(chunk)
+                continue
+            prev = fmerged[-1]
+            gap = chunk["start"] - prev["end"]
+            prev_txt = (prev.get("text") or "").strip()
+            same_sp = prev.get("speaker") == chunk.get("speaker")
+            combined = chunk["end"] - prev["start"]
+
+            if (same_sp
+                    and gap <= MAX_FRAG_GAP
+                    and combined <= MAX_MERGED_DUR
+                    and not SENTENCE_END.search(prev_txt)):
+                prev["text"] = (prev_txt + " " + txt).strip()
+                prev["end"] = chunk["end"]
+                prev["words"] = (prev.get("words") or []) + (chunk.get("words") or [])
+            else:
+                fmerged.append(chunk)
+        chunks = fmerged
 
         return chunks
 

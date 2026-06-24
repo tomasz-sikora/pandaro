@@ -14,3 +14,6 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .mypy_cache/
+
+# Local test fixtures (may contain sensitive recordings)
+test-data/

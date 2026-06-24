@@ -9,9 +9,11 @@ import {
   Mic,
   Trash2,
   Brain,
+  RefreshCw,
 } from 'lucide-react'
 import { useSessionStore } from '../store/sessionStore'
 import { useSettingsStore } from '../store/settingsStore'
+import { useAgentPipeline } from '../hooks/useAgentPipeline'
 
 const nav = [
   { to: '/', label: 'Nowe nagranie', icon: Upload, always: true },
@@ -25,12 +27,29 @@ const nav = [
 export function Sidebar() {
   const { session, clearSession } = useSessionStore()
   const { settings } = useSettingsStore()
+  const { process, cancel } = useAgentPipeline()
   const navigate = useNavigate()
   const hasSession = session !== null
 
   const handleClear = () => {
+    cancel()
     clearSession(settings.transcribeUrl)
     navigate('/')
+  }
+
+  const isProcessing =
+    session !== null &&
+    session.processing.step !== 'idle' &&
+    session.processing.step !== 'done' &&
+    session.processing.step !== 'error'
+
+  const handleReprocess = () => {
+    const file = (session as any)?.sourceFile as File | undefined
+    if (!file) { navigate('/'); return }
+    cancel()
+    // Small delay so cancel() settles before new process starts
+    setTimeout(() => process(file), 100)
+    navigate('/transcript')
   }
 
   return (
@@ -43,7 +62,7 @@ export function Sidebar() {
         <span className="font-semibold text-slate-800 text-sm">Pandaro</span>
       </div>
 
-      {/* Session info + clear */}
+      {/* Session info + controls */}
       {session && (
         <div className="mx-2 mt-2 bg-brand-50 rounded-lg overflow-hidden">
           <div className="px-3 py-2">
@@ -56,10 +75,32 @@ export function Sidebar() {
               </p>
             )}
           </div>
+          {/* Re-process button — only when not currently processing */}
+          {!isProcessing && (session as any)?.sourceFile && (
+            <button
+              onClick={handleReprocess}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-brand-700 hover:bg-brand-100 transition-colors border-t border-brand-100"
+              title="Ponów przetwarzanie tego samego pliku z aktualnymi ustawieniami"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Ponów przetwarzanie
+            </button>
+          )}
+          {/* Cancel button — only when processing */}
+          {isProcessing && (
+            <button
+              onClick={cancel}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-amber-700 hover:bg-amber-50 transition-colors border-t border-brand-100"
+              title="Zatrzymaj przetwarzanie"
+            >
+              <span className="w-3.5 h-3.5 flex items-center justify-center">■</span>
+              Zatrzymaj
+            </button>
+          )}
           <button
             onClick={handleClear}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 transition-colors border-t border-brand-100"
-            title="Wyczyść analizę"
+            title="Wyczyść analizę i zacznij od nowa"
           >
             <Trash2 className="w-3.5 h-3.5" />
             Wyczyść analizę

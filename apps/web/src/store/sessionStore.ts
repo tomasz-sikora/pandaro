@@ -28,6 +28,8 @@ interface SessionStore {
   setSegmentQuality: (quality: Record<number, number>) => void
   setTopics: (topics: Session['topics']) => void
   setQuotesAndFacts: (qf: QuotesAndFacts) => void
+  setNoiseRegions: (regions: Array<{start_sec: number; end_sec: number; type: 'silence' | 'noise'}>) => void
+  setSourceFile: (file: File) => void
   appendSegments: (segs: Segment[], detectedLanguage?: string) => void
   applyTranslations: (updates: Array<{ idx: number; text_pl: string }>) => void
   applySpeakerLabels: (segments: Segment[]) => void
@@ -35,6 +37,7 @@ interface SessionStore {
   updateLastAssistantMessage: (content: string, sources?: ChatMessage['sources']) => void
   updateSegmentText: (segmentId: number, text: string) => void
   updateSegmentWord: (segmentId: number, wordIdx: number, altText: string) => void
+  setSpeakerDisplayName: (speakerId: string, displayName: string) => void
   loadTranscript: (fileName: string, segments: Segment[], detectedLanguage?: string) => void
   clearSession: (transcribeUrl?: string) => void
   addAgentEvent: (event: AgentEvent) => void
@@ -71,6 +74,8 @@ export const useSessionStore = create<SessionStore>()((set) => ({
         segmentQuality: {},
         topics: [],
         quotesAndFacts: null,
+        noiseRegions: [],
+        sourceFile: undefined,
         createdAt: Date.now(),
       },
     }),
@@ -211,6 +216,16 @@ export const useSessionStore = create<SessionStore>()((set) => ({
       session: s.session ? { ...s.session, quotesAndFacts } : null,
     })),
 
+  setNoiseRegions: (noiseRegions) =>
+    set((s) => ({
+      session: s.session ? { ...s.session, noiseRegions } : null,
+    })),
+
+  setSourceFile: (sourceFile) =>
+    set((s) => ({
+      session: s.session ? { ...s.session, sourceFile } : null,
+    })),
+
   updateSegmentText: (segmentId, text) =>
     set((s) => {
       if (!s.session) return {}
@@ -264,4 +279,17 @@ export const useSessionStore = create<SessionStore>()((set) => ({
         ? { ...s.session, agentEvents: [...s.session.agentEvents, event] }
         : null,
     })),
+
+  setSpeakerDisplayName: (speakerId, displayName) =>
+    set((s) => {
+      if (!s.session) return {}
+      const speakerProfiles = {
+        ...s.session.speakerProfiles,
+        [speakerId]: {
+          ...(s.session.speakerProfiles[speakerId] ?? {}),
+          display_name: displayName,
+        },
+      }
+      return { session: { ...s.session, speakerProfiles } }
+    }),
 }))

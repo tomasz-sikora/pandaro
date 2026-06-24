@@ -43,6 +43,9 @@ export interface Segment {
   language?: string;
   words?: Word[];           // word-level timestamps + per-word alternatives
   alternatives?: string[];  // legacy segment-level alternatives (compat)
+  overlapping?: boolean;    // true when this segment overlaps with another speaker
+  overlap_with?: string;    // speaker ID of the overlapping segment
+  overlap_sec?: number;     // overlap duration in seconds
 }
 
 // --- Entities ---
@@ -93,6 +96,7 @@ export type ProcessingStep =
   | 'extracting'
   | 'embedding'
   | 'summarizing'
+  | 'reprocessing'
   | 'done'
   | 'error';
 
@@ -130,6 +134,10 @@ export interface Session {
   agentSessionId?: string | null;
   /** Verbatim quotes and facts extracted by the agent */
   quotesAndFacts?: QuotesAndFacts | null;
+  /** Noise / silence regions from detect_noise_regions (for waveform overlay) */
+  noiseRegions?: Array<{ start_sec: number; end_sec: number; type: 'silence' | 'noise' }>;
+  /** Original File object for re-process functionality (not serialisable, runtime only) */
+  sourceFile?: File;
 }
 
 // --- Quotes & Facts ---
@@ -156,7 +164,7 @@ export interface QuotesAndFacts {
 
 // --- Settings ---
 
-export type AsrEngine = 'whisper' | 'vibevoice' | 'nemotron';
+export type AsrEngine = 'whisper' | 'vibevoice';
 
 export interface Settings {
   transcribeUrl: string;
@@ -182,6 +190,10 @@ export type AgentEventType =
   | 'agent_memory'
   | 'quality_report'
   | 'partial_segments'
+  | 'partial_summary'
+  | 'diarization_update'
+  | 'segment_update'
+  | 'speaker_profiles_update'
   | 'segment_chunk'
   | 'translation_chunk'
   | 'translation_quality_check'

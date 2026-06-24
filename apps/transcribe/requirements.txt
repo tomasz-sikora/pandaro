@@ -27,10 +27,4 @@ tiktoken>=0.8.0
 einops>=0.8.0
 # Audio feature extraction
 datasets>=3.0.0
-# Nemotron 3.5 ASR (NVIDIA NeMo) — install separately, not via pip install -r:
-#   apt-get update && apt-get install -y libsndfile1 ffmpeg
-#   pip install Cython packaging
-#   pip install git+https://github.com/NVIDIA/NeMo.git@main#egg=nemo_toolkit[asr]
-# omegaconf is required by NeMo and used for override_config
-omegaconf>=2.3.0
 

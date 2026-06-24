@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Clock, Users, Download, Play, Pause, Loader2, Languages, Radio } from 'lucide-react'
+import { Clock, Users, Download, Play, Pause, Loader2, Languages, Radio, Pencil, Check, X, RefreshCw, Mic2 } from 'lucide-react'
 import { useSessionStore } from '../../store/sessionStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { speakerDisplayName } from '../../lib/speakerUtils'
+import { useAgentPipeline } from '../../hooks/useAgentPipeline'
+import { WaveformBar } from './WaveformBar'
 import type { Word } from '@pandaro/shared-types'
 
 const SPEAKER_COLORS: Record<string, string> = {
@@ -70,17 +73,107 @@ function WordChip({
   )
 }
 
+/** Inline editable speaker label pill. Double-click or click the pencil to edit. */
+function SpeakerEditPill({
+  speakerId,
+  displayName,
+  colorClass,
+  gender,
+  onRename,
+}: {
+  speakerId: string
+  displayName: string
+  colorClass: string
+  gender?: string | null
+  onRename: (newName: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(displayName)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const startEdit = () => {
+    setDraft(displayName)
+    setEditing(true)
+    setTimeout(() => inputRef.current?.select(), 0)
+  }
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    if (trimmed && trimmed !== displayName) onRename(trimmed)
+    setEditing(false)
+  }
+
+  const GENDER_ICON: Record<string, string> = { meski: '♂', zenski: '♀', dziecko: '🧒' }
+
+  if (editing) {
+    return (
+      <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${colorClass}`}>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false) }}
+          onBlur={commit}
+          className="bg-transparent outline-none w-24 text-xs"
+          autoFocus
+        />
+        <button onClick={commit} className="opacity-70 hover:opacity-100"><Check className="w-3 h-3" /></button>
+        <button onClick={() => setEditing(false)} className="opacity-70 hover:opacity-100"><X className="w-3 h-3" /></button>
+      </span>
+    )
+  }
+
+  return (
+    <span
+      className={`group inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium cursor-pointer ${colorClass}`}
+      onDoubleClick={startEdit}
+      title="Kliknij dwukrotnie aby zmienić nazwę mówcy"
+    >
+      {gender && GENDER_ICON[gender] && <span className="opacity-60 text-[10px]">{GENDER_ICON[gender]}</span>}
+      {displayName}
+      <button
+        onClick={e => { e.stopPropagation(); startEdit() }}
+        className="opacity-0 group-hover:opacity-50 hover:!opacity-100 transition-opacity ml-0.5"
+        title="Zmień nazwę"
+      >
+        <Pencil className="w-2.5 h-2.5" />
+      </button>
+    </span>
+  )
+}
+
+/** Non-word sound badge (mhm, cough, etc.) */
+function SoundBadge({ text }: { text: string }) {
+  const NON_WORD_SOUNDS: Record<string, string> = {
+    mhm: '👍 mhm', hmm: '🤔 hmm', hm: '🤔 hm', aha: '💡 aha',
+    ugh: '😩 ugh', uhh: '🔇 uhh', uh: '🔇 uh', eh: '🤷 eh',
+    '[cough]': '🤧 kaszel', '[laugh]': '😄 śmiech', '[noise]': '🔊 szum',
+    '[music]': '🎵 muzyka', '[applause]': '👏 aplauz',
+  }
+  const clean = text.toLowerCase().replace(/[.,!?]/g, '').trim()
+  const label = NON_WORD_SOUNDS[clean]
+  if (!label) return <span>{text}</span>
+  return (
+    <span className="inline-flex items-center gap-0.5 text-xs bg-slate-100 text-slate-500 rounded px-1 mx-0.5 font-mono italic">
+      {label}
+    </span>
+  )
+}
+
 export default function TranscriptPage() {
-  const { session, updateSegmentWord } = useSessionStore()
+  const { session, updateSegmentWord, setSpeakerDisplayName } = useSessionStore()
+  const { settings } = useSettingsStore()
   const navigate = useNavigate()
   const [activeSegment, setActiveSegment] = useState<number | null>(null)
   const [audioSrc, setAudioSrc] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [showTranslation, setShowTranslation] = useState(true)
+  const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const segmentRefs = useRef<Record<number, HTMLDivElement | null>>({})
+  const { reprocessFragment } = useAgentPipeline()
 
   const profiles = session?.speakerProfiles ?? {}
   const spName = (sp: string) => speakerDisplayName(sp, profiles)
@@ -348,23 +441,81 @@ export default function TranscriptPage() {
               <span key={i}>{fmtTime((duration / 4) * i)}</span>
             ))}
           </div>
+          {/* Waveform — shown when audio is loaded */}
+          {audioSrc && (
+            <div className="ml-[5.5rem] mr-10 mt-1">
+              <WaveformBar
+                audioSrc={audioSrc}
+                duration={duration}
+                currentTime={currentTime}
+                noiseRegions={(session as any).noiseRegions ?? []}
+                onSeek={seekTo}
+                height={40}
+                selection={selection}
+                onSelectionChange={setSelection}
+              />
+              {/* Fragment re-process toolbar — appears when a range is selected */}
+              {selection && selection.end > selection.start && (
+                <div className="mt-1.5 flex items-center gap-2 flex-wrap text-xs bg-indigo-50 border border-indigo-100 rounded-lg px-2.5 py-1.5">
+                  <span className="text-indigo-700 font-medium">
+                    Zaznaczono {fmtTime(selection.start)}–{fmtTime(selection.end)}:
+                  </span>
+                  <button
+                    onClick={() => { reprocessFragment(selection.start, selection.end, 'transcription'); setSelection(null) }}
+                    disabled={isProcessing || !session.sourceFile}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Ponów transkrypcję tego fragmentu"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Transkrypcja
+                  </button>
+                  <button
+                    onClick={() => { reprocessFragment(selection.start, selection.end, 'diarization'); setSelection(null) }}
+                    disabled={isProcessing || !session.sourceFile}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Ponów diaryzację (przypisanie mówców) tego fragmentu"
+                  >
+                    <Users className="w-3 h-3" /> Diaryzacja
+                  </button>
+                  <button
+                    onClick={() => { reprocessFragment(selection.start, selection.end, 'translation'); setSelection(null) }}
+                    disabled={isProcessing || !session.sourceFile}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Ponów tłumaczenie tego fragmentu"
+                  >
+                    <Languages className="w-3 h-3" /> Tłumaczenie
+                  </button>
+                  <button
+                    onClick={() => setSelection(null)}
+                    className="ml-auto text-slate-400 hover:text-slate-600"
+                    title="Anuluj zaznaczenie"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Speaker legend */}
+      {/* Speaker legend with inline editing */}
       {speakers.length > 1 && (
-        <div className="bg-white border-b border-slate-200 px-6 py-2 flex items-center gap-2 flex-wrap">
-          {speakers.map((sp) => (
-            <span
-              key={sp}
-              className={`text-xs px-2 py-0.5 rounded-full font-medium ${SPEAKER_COLORS[sp] ?? 'bg-slate-100 text-slate-600'}`}
-            >
-              {spName(sp)}
-              {spName(sp) !== sp && (
-                <span className="ml-1 opacity-50">({sp})</span>
-              )}
-            </span>
-          ))}
+        <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-2 flex-wrap">
+          <Mic2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          {speakers.map((sp) => {
+            const profile = profiles[sp]
+            return (
+              <SpeakerEditPill
+                key={sp}
+                speakerId={sp}
+                displayName={spName(sp)}
+                colorClass={SPEAKER_COLORS[sp] ?? 'bg-slate-100 text-slate-600'}
+                gender={profile?.gender ?? null}
+                onRename={(name) => setSpeakerDisplayName?.(sp, name)}
+              />
+            )
+          })}
+          <span className="text-[10px] text-slate-300 ml-1 shrink-0">dwuklik = zmień nazwę</span>
         </div>
       )}
 
@@ -389,12 +540,18 @@ export default function TranscriptPage() {
           const translationMissing = isNonPolish && !hasTranslation
           const hasWords = seg.words && seg.words.length > 0
           const hasAnyAlts = hasWords && seg.words!.some((w) => w.alternatives && w.alternatives.length > 0)
+          const segTags: string[] = (seg as any).tags ?? []
+          const isInterjection = segTags.includes('interjection')
+          const isLowConf = segTags.includes('low-conf')
+          const hasIPA = segTags.includes('ipa')
+          const isOverlapping = seg.overlapping === true
+          const profile = profiles[seg.speaker]
           return (
             <div
               key={seg.id}
               ref={(el) => { segmentRefs.current[idx] = el }}
               className={[
-                'flex gap-3 p-3 rounded-xl transition-colors cursor-pointer',
+                'group flex gap-3 p-3 rounded-xl transition-colors cursor-pointer relative',
                 isActive ? 'bg-brand-50 ring-1 ring-brand-200' : `hover:bg-slate-50 ${confidenceColor(idx)}`,
               ].join(' ')}
               onClick={() => seekTo(seg.start)}
@@ -403,49 +560,93 @@ export default function TranscriptPage() {
                 {fmtTime(seg.start)}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className={`text-xs font-semibold ${SPEAKER_COLORS[seg.speaker] ?? 'text-slate-600'}`}>
-                    {spName(seg.speaker)}
-                  </span>
-                  {hasAnyAlts && (
-                    <span className="text-xs text-amber-600 font-medium" title="Segment zawiera słowa z niską pewnością">
-                      ✱ niepewne słowa
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <SpeakerEditPill
+                    speakerId={seg.speaker}
+                    displayName={spName(seg.speaker)}
+                    colorClass={SPEAKER_COLORS[seg.speaker] ?? 'bg-slate-100 text-slate-600'}
+                    gender={profile?.gender ?? null}
+                    onRename={(name) => setSpeakerDisplayName?.(seg.speaker, name)}
+                  />
+                  {isOverlapping && (
+                    <span
+                      className="text-[10px] bg-orange-50 text-orange-500 px-1.5 py-0.5 rounded-full"
+                      title={`Nakładanie głosów${seg.overlap_with ? ` z ${seg.overlap_with}` : ''}${seg.overlap_sec ? ` (${seg.overlap_sec.toFixed(1)}s)` : ''}`}
+                    >
+                      ⟨⟩ nakładanie
                     </span>
                   )}
+                  {isInterjection && (
+                    <span className="text-[10px] bg-violet-50 text-violet-500 px-1.5 py-0.5 rounded-full">wtrącenie</span>
+                  )}
+                  {isLowConf && (
+                    <span className="text-[10px] bg-amber-50 text-amber-500 px-1.5 py-0.5 rounded-full">⚠ niska konf.</span>
+                  )}
+                  {hasIPA && (
+                    <span className="text-[10px] bg-blue-50 text-blue-500 px-1.5 py-0.5 rounded-full font-mono">IPA</span>
+                  )}
+                  {hasAnyAlts && (
+                    <span className="text-[10px] text-amber-600" title="Segment zawiera słowa z niską pewnością">✱ niepewne</span>
+                  )}
                   {translationMissing && showTranslation && (
-                    <span className="text-xs text-slate-400 italic">brak tłumaczenia</span>
+                    <span className="text-[10px] text-slate-400 italic">brak tłum.</span>
                   )}
                 </div>
 
                 {/* Polish translation */}
                 {hasTranslation && showTranslation && (
-                  <p className="text-slate-900 text-sm leading-relaxed mb-1">
-                    {seg.text_pl}
-                  </p>
+                  <p className="text-slate-900 text-sm leading-relaxed mb-1">{seg.text_pl}</p>
                 )}
 
-                {/* Original text — always shown, dimmed when translation is visible */}
-                <p
-                  className={[
-                    'text-sm leading-relaxed',
-                    hasTranslation && showTranslation
-                      ? 'text-slate-400 text-xs italic'
-                      : 'text-slate-800',
-                  ].join(' ')}
-                >
-                  {hasTranslation && showTranslation && <span className="not-italic mr-1 opacity-60">({seg.language?.toUpperCase()})</span>}
+                {/* Original text */}
+                <p className={[
+                  'text-sm leading-relaxed',
+                  hasTranslation && showTranslation ? 'text-slate-400 text-xs italic' : 'text-slate-800',
+                ].join(' ')}>
+                  {hasTranslation && showTranslation && (
+                    <span className="not-italic mr-1 opacity-60">({seg.language?.toUpperCase()})</span>
+                  )}
                   {hasWords
                     ? seg.words!.map((w, wi) => (
-                        <WordChip
-                          key={wi}
-                          word={w}
-                          onAccept={(alt) => updateSegmentWord(seg.id, wi, alt)}
-                        />
+                        w.text.trim().startsWith('[') || w.text.trim().startsWith('<')
+                          ? <SoundBadge key={wi} text={w.text} />
+                          : <WordChip key={wi} word={w} onAccept={(alt) => updateSegmentWord(seg.id, wi, alt)} />
                       ))
-                    : seg.text
+                    : <SoundBadge text={seg.text} />
                   }
                 </p>
+
+                {/* IPA annotations for low-confidence words */}
+                {hasIPA && hasWords && (
+                  <p className="mt-1 text-[10px] text-blue-400 font-mono">
+                    {seg.words!.filter(w => (w as any).ipa).map((w, wi) => (
+                      <span key={wi} className="mr-2">{w.text.trim()}→[{(w as any).ipa}]</span>
+                    ))}
+                  </p>
+                )}
               </div>
+
+              {/* Re-transcribe button (visible on hover) */}
+              <button
+                className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50"
+                title="Re-transkrybuj ten segment z lepszymi parametrami"
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  const agentSid = session.agentSessionId
+                  if (!agentSid) { alert('Sesja agenta nieaktywna'); return }
+                  try {
+                    await fetch(`${settings.transcribeUrl}/hint/${agentSid}`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        hint: `Re-transcribe segment id=${seg.id} (${fmtTime(seg.start)}–${fmtTime(seg.end)}) with multi_pass_transcribe_segment. Use padding_sec=2.0 and high beam_size=8.`,
+                      }),
+                    })
+                  } catch { alert('Nie można wysłać wskazówki do agenta') }
+                }}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
             </div>
           )
         })}

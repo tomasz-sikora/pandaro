@@ -15,7 +15,6 @@ GET  /cache/info        → LRU cache statistics
 VRAM strategy (unchanged):
   - Whisper loaded at startup (~6 GB).
   - VibeVoice (9B, ~18 GB) loaded lazily, unloaded after use.
-  - Nemotron (600M, ~1.2 GB) loaded lazily, stays loaded.
   - Agent (gemma4:26b) decides engine choice per session.
 """
 import asyncio
@@ -27,17 +26,19 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from .transcriber import WhisperTranscriber
 from .vibevoice_transcriber import VibeVoiceTranscriber
-from .nemotron_transcriber import NemotronTranscriber
 from .diarizer import Diarizer
 from .speaker_profiler import SpeakerProfiler
 from .audio_features import AudioFeatureExtractor
 from .translator import ollama_available
 from .cache import LRUCache
-from .agent import AgentContext, run_agent, inject_hint, get_active_sessions
+from .agent import (
+    AgentContext, run_agent, run_reprocess, inject_hint, cancel_session,
+    is_busy, get_active_sessions,
+)
 from .memory import list_memories, delete_memory, clear_all_memories
 from . import translator as _translator_mod
 
@@ -62,26 +63,24 @@ _executor = ThreadPoolExecutor(max_workers=1)
 # In-memory LRU caches (keyed by request parameters, never embeddings)
 _transcribe_cache: LRUCache = LRUCache(maxsize=10, name="transcribe")
 
-# Whisper loaded at startup; VibeVoice and Nemotron loaded lazily per first use
+# Whisper loaded at startup; VibeVoice loaded lazily per first use
 _whisper: Optional[WhisperTranscriber] = None
 _vibevoice: Optional[VibeVoiceTranscriber] = None   # None = not yet loaded; loaded on first VV request
 _vibevoice_available: bool = False                   # True = imports OK, can be loaded
-_nemotron: Optional[NemotronTranscriber] = None      # None = not yet loaded; loaded lazily
-_nemotron_available: bool = False                    # True = NeMo imports OK
 _diarizer: Optional[Diarizer] = None
 _profiler: Optional[SpeakerProfiler] = None
 _audio_features: Optional[AudioFeatureExtractor] = None
 # Track which engine currently holds GPU memory
-_gpu_engine: Optional[str] = None  # "whisper" | "vibevoice" | "nemotron" | None
+_gpu_engine: Optional[str] = None  # "whisper" | "vibevoice" | None
 
 
 @app.on_event("startup")
 async def startup():
-    global _whisper, _vibevoice_available, _nemotron_available, _diarizer, _profiler, _audio_features, _gpu_engine
+    global _whisper, _vibevoice_available, _diarizer, _profiler, _audio_features, _gpu_engine
     loop = asyncio.get_event_loop()
-    logger.info("Loading Whisper at startup (VibeVoice and Nemotron load lazily on first use)…")
+    logger.info("Loading Whisper at startup (VibeVoice loads lazily on first use)…")
     result = await loop.run_in_executor(_executor, _load_startup_models)
-    _whisper, _vibevoice_available, _nemotron_available, _diarizer, _profiler, _audio_features, _gpu_engine = result
+    _whisper, _vibevoice_available, _diarizer, _profiler, _audio_features, _gpu_engine = result
     logger.info("Startup models loaded — agent-based pipeline active.")
 
 
@@ -104,19 +103,10 @@ def _load_startup_models():
     except Exception as e:
         logger.warning(f"VibeVoice-ASR unavailable: {e}")
 
-    # Check Nemotron importability without loading weights
-    nemotron_available = False
-    try:
-        import nemo.collections.asr  # noqa: F401
-        nemotron_available = True
-        logger.info("Nemotron 3.5 ASR: NeMo imports OK, will load lazily on first use.")
-    except Exception as e:
-        logger.warning(f"Nemotron 3.5 ASR unavailable (NeMo not installed?): {e}")
-
     diarizer = Diarizer()
     profiler = SpeakerProfiler()
     audio_features = AudioFeatureExtractor()
-    return whisper, vv_available, nemotron_available, diarizer, profiler, audio_features, gpu_engine
+    return whisper, vv_available, diarizer, profiler, audio_features, gpu_engine
 
 
 def _free_gpu_memory():
@@ -158,13 +148,6 @@ def _offload_all_from_gpu() -> None:
         except Exception:
             pass
 
-    # 5. Offload Nemotron if loaded (small model, but free VRAM for VibeVoice)
-    if _nemotron is not None:
-        try:
-            _nemotron.unload_from_gpu()
-        except Exception:
-            pass
-
     _free_gpu_memory()
     _gpu_engine = None
     logger.info("All models offloaded from GPU.")
@@ -198,12 +181,6 @@ def _reload_all_to_gpu() -> None:
         except Exception:
             pass
 
-    if _nemotron is not None:
-        try:
-            _nemotron.reload_to_gpu()
-        except Exception:
-            pass
-
     _gpu_engine = "whisper"
     logger.info("Models reloaded to GPU.")
 
@@ -224,23 +201,6 @@ def _unload_vibevoice():
         logger.info("VibeVoice-ASR unloaded.")
     # Reload support models to GPU
     _reload_all_to_gpu()
-
-
-def _ensure_nemotron_loaded(progress_cb=None) -> "NemotronTranscriber":
-    """Load Nemotron lazily on first use (stays loaded — small model ~1.2 GB)."""
-    global _nemotron, _gpu_engine
-
-    if _nemotron is not None:
-        if not _nemotron.is_on_gpu:
-            _nemotron.reload_to_gpu()
-        return _nemotron
-
-    if progress_cb:
-        progress_cb(5, "Ładowanie Nemotron 3.5 ASR na GPU (~1.2 GB, pierwsze uruchomienie ~30 s)…")
-
-    _nemotron = NemotronTranscriber()
-    _gpu_engine = "nemotron"
-    return _nemotron
 
 
 def _ensure_vibevoice_loaded(progress_cb=None) -> "VibeVoiceTranscriber":
@@ -287,17 +247,6 @@ def _engine_info(engine: str) -> dict:
             "diarization": "built-in",
             "description": "VibeVoice-ASR 9B – single-pass ASR + diarization, 50+ languages (lazy GPU load)",
         }
-    if engine == "nemotron":
-        loaded = _nemotron is not None
-        return {
-            "engine": "nemotron",
-            "model": os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-asr-streaming-0.6b"),
-            "loaded": loaded,
-            "available": _nemotron_available,
-            "on_gpu": _nemotron.is_on_gpu if loaded else False,
-            "diarization": "pyannote",
-            "description": "Nemotron 3.5 ASR 600 M – cache-aware FastConformer-RNNT, 40 language-locales (lazy GPU load, ~1.2 GB)",
-        }
     loaded = _whisper is not None
     return {
         "engine": "whisper",
@@ -326,7 +275,6 @@ async def health():
         "engines": {
             "whisper": _engine_info("whisper"),
             "vibevoice": _engine_info("vibevoice"),
-            "nemotron": _engine_info("nemotron"),
         },
         "profiler": _profiler._method if _profiler else "none",
         "audio_features": _audio_features.loaded_extractors if _audio_features else [],
@@ -341,8 +289,6 @@ async def engines_endpoint():
         result.append(_engine_info("whisper"))
     if _vibevoice_available:
         result.append(_engine_info("vibevoice"))
-    if _nemotron_available:
-        result.append(_engine_info("nemotron"))
     return {"engines": result}
 
 
@@ -383,6 +329,17 @@ async def inject_session_hint(session_id: str, body: dict):
     return {"accepted": accepted, "session_id": session_id}
 
 
+@app.post("/session/{session_id}/cancel")
+async def cancel_session_endpoint(session_id: str):
+    """Request cancellation of a running agent session.
+
+    The agent loop checks the flag between steps and aborts cleanly,
+    emitting a `cancelled` SSE event on the original stream.
+    """
+    accepted = cancel_session(session_id)
+    return {"accepted": accepted, "session_id": session_id}
+
+
 @app.get("/memories")
 async def get_memories():
     return {"memories": list_memories()}
@@ -418,17 +375,27 @@ async def transcribe(
     """
     engine = engine.lower().strip()
 
+    # ── Single-analysis policy ────────────────────────────────────────────────
+    # Only one analysis may run at a time (single GPU, sequential executor).
+    # Reject concurrent uploads with 409 so the UI can surface a clear message
+    # instead of silently queueing behind the executor.
+    if is_busy():
+        active = get_active_sessions()
+        return JSONResponse(
+            status_code=409,
+            content={
+                "type": "error",
+                "message": "Trwa już inna analiza. Anuluj ją lub poczekaj na zakończenie.",
+                "active_sessions": active,
+            },
+        )
+
     if engine == "vibevoice" and not _vibevoice_available:
         async def _err():
             yield 'data: {"type":"error","message":"VibeVoice-ASR nie jest dostępny."}\n\n'
         return StreamingResponse(_err(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    if engine == "nemotron" and not _nemotron_available:
-        async def _err():
-            yield 'data: {"type":"error","message":"Nemotron 3.5 ASR nie jest dostępny."}\n\n'
-        return StreamingResponse(_err(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    if engine not in ("vibevoice", "nemotron") and _whisper is None:
+    if engine != "vibevoice" and _whisper is None:
         async def _err():
             yield 'data: {"type":"error","message":"Whisper nie jest dostępny."}\n\n'
         return StreamingResponse(_err(), media_type="text/event-stream",
@@ -442,7 +409,6 @@ async def transcribe(
     models = {
         "whisper": _whisper,
         "vibevoice_loader": _ensure_vibevoice_loaded,
-        "nemotron_loader": _ensure_nemotron_loaded,
         "ensure_whisper_gpu": _ensure_whisper_on_gpu,
         "diarizer": _diarizer,
         "profiler": _profiler,
@@ -500,3 +466,108 @@ def _run_agent_safe(ctx: AgentContext, models: dict) -> None:
     finally:
         if ctx.asr_engine == "vibevoice":
             _unload_vibevoice()
+
+
+# ── Fragment re-processing endpoint ───────────────────────────────────────────
+
+@app.post("/reprocess")
+async def reprocess(
+    file: UploadFile = File(...),
+    segments: str = Form(...),          # JSON array of current segments
+    start_sec: float = Form(...),
+    end_sec: float = Form(...),
+    mode: str = Form(...),              # transcription | diarization | translation
+    language: Optional[str] = Form(default=None),
+    detected_language: Optional[str] = Form(default=None),
+    engine: str = Form(default="whisper"),
+    model: Optional[str] = Form(default=None),
+):
+    """Re-process a selected time range of an existing transcript.
+
+    The client sends the source audio + current segments + a [start, end] range
+    and a mode. Only the chosen step is re-run on that fragment; the result is
+    spliced back and streamed as a fresh `result` event.
+    """
+    mode = mode.lower().strip()
+    if mode not in ("transcription", "diarization", "translation"):
+        return JSONResponse(status_code=400,
+                            content={"type": "error", "message": f"Nieznany tryb: {mode}"})
+
+    if is_busy():
+        return JSONResponse(
+            status_code=409,
+            content={
+                "type": "error",
+                "message": "Trwa już inna analiza. Anuluj ją lub poczekaj na zakończenie.",
+                "active_sessions": get_active_sessions(),
+            },
+        )
+
+    if _whisper is None:
+        return JSONResponse(status_code=503,
+                            content={"type": "error", "message": "Whisper nie jest dostępny."})
+
+    try:
+        parsed_segments = json.loads(segments)
+        if not isinstance(parsed_segments, list):
+            raise ValueError("segments must be a JSON array")
+    except (json.JSONDecodeError, ValueError) as exc:
+        return JSONResponse(status_code=400,
+                            content={"type": "error", "message": f"Nieprawidłowe segmenty: {exc}"})
+
+    content = await file.read()
+    filename = file.filename or "audio"
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    models = {
+        "whisper": _whisper,
+        "vibevoice_loader": _ensure_vibevoice_loaded,
+        "ensure_whisper_gpu": _ensure_whisper_on_gpu,
+        "diarizer": _diarizer,
+        "profiler": _profiler,
+        "audio_features": _audio_features,
+        "transcribe_cache": _transcribe_cache,
+        "unload_vibevoice": _unload_vibevoice,
+    }
+
+    ctx = AgentContext(
+        audio_content=content,
+        filename=filename,
+        language_hint=language or None,
+        do_translate=False,
+        queue=queue,
+        loop=loop,
+        ollama_model=model.strip() if model and model.strip() else None,  # type: ignore[arg-type]
+    )
+    # Pre-load existing transcript state into the context.
+    ctx.segments = [dict(s) for s in parsed_segments]
+    ctx.detected_language = detected_language or (language or "auto")
+    ctx.asr_engine = engine.lower().strip()
+
+    future = loop.run_in_executor(
+        _executor, lambda: run_reprocess(ctx, models, start_sec, end_sec, mode)
+    )
+
+    async def generate():
+        try:
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=1800.0)
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") in ("result", "error"):
+                    break
+        except asyncio.TimeoutError:
+            yield 'data: {"type":"error","message":"Timeout \u2014 brak aktywno\u015bci"}\n\n'
+        try:
+            await future
+        except Exception:
+            pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+

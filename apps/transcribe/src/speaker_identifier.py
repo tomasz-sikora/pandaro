@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 import os
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:26b")
-_TIMEOUT = 90.0
+_TIMEOUT = 180.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
