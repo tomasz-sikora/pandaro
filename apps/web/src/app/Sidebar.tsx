@@ -8,24 +8,28 @@ import {
   Settings,
   Mic,
   Trash2,
+  Brain,
 } from 'lucide-react'
 import { useSessionStore } from '../store/sessionStore'
+import { useSettingsStore } from '../store/settingsStore'
 
 const nav = [
   { to: '/', label: 'Nowe nagranie', icon: Upload, always: true },
   { to: '/transcript', label: 'Transkrypcja', icon: FileText, always: false },
   { to: '/analysis', label: 'Analiza', icon: BarChart2, always: false },
+  { to: '/agent-log', label: 'Log agenta', icon: Brain, always: false },
   { to: '/search', label: 'Szukaj', icon: Search, always: false },
   { to: '/chat', label: 'Rozmowa z AI', icon: MessageSquare, always: false },
 ]
 
 export function Sidebar() {
   const { session, clearSession } = useSessionStore()
+  const { settings } = useSettingsStore()
   const navigate = useNavigate()
   const hasSession = session !== null
 
   const handleClear = () => {
-    clearSession()
+    clearSession(settings.transcribeUrl)
     navigate('/')
   }
 

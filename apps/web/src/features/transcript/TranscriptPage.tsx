@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Clock, Users, Download, Play, Pause, Loader2 } from 'lucide-react'
+import { Clock, Users, Download, Play, Pause, Loader2, Languages, Radio } from 'lucide-react'
 import { useSessionStore } from '../../store/sessionStore'
 import { speakerDisplayName } from '../../lib/speakerUtils'
 import type { Word } from '@pandaro/shared-types'
@@ -77,12 +77,33 @@ export default function TranscriptPage() {
   const [audioSrc, setAudioSrc] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
+  const [showTranslation, setShowTranslation] = useState(true)
   const audioRef = useRef<HTMLAudioElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const segmentRefs = useRef<Record<number, HTMLDivElement | null>>({})
 
   const profiles = session?.speakerProfiles ?? {}
   const spName = (sp: string) => speakerDisplayName(sp, profiles)
+  const segmentQuality = session?.segmentQuality ?? {}
+
+  // Confidence → background colour (0=red, 0.5=amber, 0.75+=transparent)
+  const confidenceColor = (idx: number): string => {
+    const conf = segmentQuality[idx]
+    if (conf === undefined) return ''
+    if (conf < 0.5) return 'bg-red-50 border-l-2 border-red-300'
+    if (conf < 0.70) return 'bg-amber-50 border-l-2 border-amber-300'
+    return ''
+  }
+
+  const isProcessing =
+    session !== null &&
+    session.processing.step !== 'idle' &&
+    session.processing.step !== 'done' &&
+    session.processing.step !== 'error'
+
+  const isNonPolish = !!(session?.detectedLanguage && session.detectedLanguage !== 'pl' && session.detectedLanguage !== 'auto')
+  const translatedCount = session?.segments.filter(s => s.text_pl && s.text_pl !== s.text).length ?? 0
+  const hasAnyTranslation = translatedCount > 0
 
   // Auto-load audio from session when available (set by processing pipeline)
   useEffect(() => {
@@ -121,9 +142,12 @@ export default function TranscriptPage() {
   }
 
   const exportText = () => {
-    const lines = session.segments.map(
-      (s) => `[${fmtTime(s.start)} - ${fmtTime(s.end)}] ${spName(s.speaker)}: ${s.text}`,
-    )
+    const lines = session.segments.map((s) => {
+      const header = `[${fmtTime(s.start)} - ${fmtTime(s.end)}] ${spName(s.speaker)}:`
+      const hasTranslation = s.text_pl && s.text_pl !== s.text
+      if (hasTranslation) return `${header} ${s.text_pl}\n  (${s.text})`
+      return `${header} ${s.text}`
+    })
     const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -140,6 +164,24 @@ export default function TranscriptPage() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Live processing banner */}
+      {isProcessing && (
+        <div className="bg-brand-600 text-white px-4 py-2 flex items-center gap-3 text-sm shrink-0">
+          <Radio className="w-4 h-4 animate-pulse shrink-0" />
+          <span className="font-medium">Agent przetwarza na żywo</span>
+          <span className="text-brand-200 text-xs">{session?.processing.message}</span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-brand-200 text-xs">{session?.segments.length} segm.</span>
+            <div className="w-24 bg-brand-500 rounded-full h-1">
+              <div
+                className="bg-white h-1 rounded-full transition-all duration-300"
+                style={{ width: `${session?.processing.progress ?? 0}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-4">
         <div className="flex-1">
@@ -158,6 +200,16 @@ export default function TranscriptPage() {
             {session.detectedLanguage && session.detectedLanguage !== 'auto' && (
               <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
                 {session.detectedLanguage}
+              </span>
+            )}
+            {isNonPolish && hasAnyTranslation && (
+              <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+                {translatedCount}/{session.segments.length} → PL
+              </span>
+            )}
+            {isNonPolish && !hasAnyTranslation && session.processing.step === 'done' && (
+              <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                brak tłumaczenia
               </span>
             )}
           </div>
@@ -182,6 +234,21 @@ export default function TranscriptPage() {
               className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 transition-colors"
             >
               {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+            </button>
+          )}
+          {isNonPolish && hasAnyTranslation && (
+            <button
+              onClick={() => setShowTranslation((v) => !v)}
+              title={showTranslation ? 'Ukryj tłumaczenie' : 'Pokaż tłumaczenie na polski'}
+              className={[
+                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors',
+                showTranslation
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50',
+              ].join(' ')}
+            >
+              <Languages className="w-3.5 h-3.5" />
+              PL
             </button>
           )}
           <button
@@ -318,7 +385,8 @@ export default function TranscriptPage() {
         )}
         {session.segments.map((seg, idx) => {
           const isActive = idx === activeSegment
-          const hasTranslation = seg.text_pl && seg.text_pl !== seg.text
+          const hasTranslation = !!(seg.text_pl && seg.text_pl !== seg.text)
+          const translationMissing = isNonPolish && !hasTranslation
           const hasWords = seg.words && seg.words.length > 0
           const hasAnyAlts = hasWords && seg.words!.some((w) => w.alternatives && w.alternatives.length > 0)
           return (
@@ -327,7 +395,7 @@ export default function TranscriptPage() {
               ref={(el) => { segmentRefs.current[idx] = el }}
               className={[
                 'flex gap-3 p-3 rounded-xl transition-colors cursor-pointer',
-                isActive ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-slate-50',
+                isActive ? 'bg-brand-50 ring-1 ring-brand-200' : `hover:bg-slate-50 ${confidenceColor(idx)}`,
               ].join(' ')}
               onClick={() => seekTo(seg.start)}
             >
@@ -335,7 +403,7 @@ export default function TranscriptPage() {
                 {fmtTime(seg.start)}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
+                <div className="flex items-center gap-2 mb-1">
                   <span className={`text-xs font-semibold ${SPEAKER_COLORS[seg.speaker] ?? 'text-slate-600'}`}>
                     {spName(seg.speaker)}
                   </span>
@@ -344,21 +412,28 @@ export default function TranscriptPage() {
                       ✱ niepewne słowa
                     </span>
                   )}
+                  {translationMissing && showTranslation && (
+                    <span className="text-xs text-slate-400 italic">brak tłumaczenia</span>
+                  )}
                 </div>
 
-                {hasTranslation && (
-                  <span className="text-slate-800 text-sm leading-relaxed block">
+                {/* Polish translation */}
+                {hasTranslation && showTranslation && (
+                  <p className="text-slate-900 text-sm leading-relaxed mb-1">
                     {seg.text_pl}
-                  </span>
+                  </p>
                 )}
 
-                <span
+                {/* Original text — always shown, dimmed when translation is visible */}
+                <p
                   className={[
                     'text-sm leading-relaxed',
-                    hasTranslation ? 'text-slate-400 text-xs italic' : 'text-slate-800',
+                    hasTranslation && showTranslation
+                      ? 'text-slate-400 text-xs italic'
+                      : 'text-slate-800',
                   ].join(' ')}
                 >
-                  {hasTranslation && '('}
+                  {hasTranslation && showTranslation && <span className="not-italic mr-1 opacity-60">({seg.language?.toUpperCase()})</span>}
                   {hasWords
                     ? seg.words!.map((w, wi) => (
                         <WordChip
@@ -369,8 +444,7 @@ export default function TranscriptPage() {
                       ))
                     : seg.text
                   }
-                  {hasTranslation && ')'}
-                </span>
+                </p>
               </div>
             </div>
           )

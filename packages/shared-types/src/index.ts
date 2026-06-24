@@ -118,8 +118,40 @@ export interface Session {
   ragEntries: VectorEntry[];
   chat: ChatMessage[];
   createdAt: number;
-  /** Blob object URL created from the uploaded audio file. */
   audioObjectUrl?: string | null;
+  agentEvents: AgentEvent[];
+  segmentsPartial?: boolean;
+  qualityStats?: QualityStats | null;
+  /** Segment quality scores from verify_transcript_quality (index → avg confidence) */
+  segmentQuality?: Record<number, number>;
+  /** Topics detected per time window */
+  topics?: Array<{ start_sec: number; end_sec: number; topic: string }>;
+  /** Active agent session ID (for hint injection) */
+  agentSessionId?: string | null;
+  /** Verbatim quotes and facts extracted by the agent */
+  quotesAndFacts?: QuotesAndFacts | null;
+}
+
+// --- Quotes & Facts ---
+
+export interface Quote {
+  speaker: string;
+  timestamp: string;
+  text: string;
+  significance?: string;
+}
+
+export interface Fact {
+  speaker: string;
+  text: string;
+  category: 'number' | 'date' | 'name' | 'claim' | string;
+}
+
+export interface QuotesAndFacts {
+  quotes: Quote[];
+  facts: Fact[];
+  decisions: Array<{ text: string; participants: string[] }>;
+  key_questions: Array<{ speaker: string; text: string }>;
 }
 
 // --- Settings ---
@@ -137,4 +169,65 @@ export interface Settings {
   translateToPl: boolean;
   defaultAsrEngine: AsrEngine;
   theme: 'light' | 'dark' | 'system';
+}
+
+// --- Agent ---
+
+export type AgentEventType =
+  | 'agent_start'
+  | 'agent_thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'tool_error'
+  | 'agent_memory'
+  | 'quality_report'
+  | 'partial_segments'
+  | 'segment_chunk'
+  | 'translation_chunk'
+  | 'translation_quality_check'
+  | 'hint_injected'
+  | 'progress'
+  | 'result'
+  | 'error';
+
+export interface QualityStats {
+  avg_confidence: number;
+  low_confidence_count: number;
+  repetitions: number;
+  very_short_segments: number;
+  long_gaps: number;
+  total_segments: number;
+  warnings?: string[];
+  recommend_retranscribe?: boolean;
+}
+
+export interface AgentEvent {
+  type: AgentEventType;
+  /** For tool_call / tool_result / tool_error */
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  attempt?: number;
+  success?: boolean;
+  skipped?: boolean;
+  /** For agent_thinking */
+  step?: number;
+  message?: string;
+  /** For agent_memory */
+  memory?: AgentMemory;
+  /** For quality_report */
+  avg_confidence?: number;
+  low_confidence_segments?: Array<{ id: number; start?: number; text: string; confidence: number }>;
+  warnings?: string[];
+  stats?: QualityStats;
+}
+
+export interface AgentMemory {
+  id: string;
+  observation: string;
+  improvement: string;
+  tags: string[];
+  created_at: number;
+  times_applied: number;
 }

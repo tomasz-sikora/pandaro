@@ -1,32 +1,33 @@
 """
-FastAPI transcription service with SSE streaming progress.
+FastAPI transcription service — agent-based architecture (v3).
 
 POST /transcribe
   multipart/form-data: file, language?, translate?, engine?
-  Returns text/event-stream → progress events + final result.
+  Returns text/event-stream → agent events + final result.
 
-GET /health  → engines status, diarizer, profiler, ollama
-GET /engines → list of available (loaded) engines
+GET  /health            → engines status, diarizer, profiler, ollama
+GET  /engines           → list of available (loaded) engines
+GET  /memories          → list agent skill memories
+DELETE /memories/{id}   → delete a memory by id
+DELETE /memories        → clear all memories
+GET  /cache/info        → LRU cache statistics
 
-VRAM strategy:
-  - Whisper is loaded at startup (GPU, ~6 GB).
-  - VibeVoice (9B, ~18 GB) is loaded LAZILY on first use and unloaded
-    afterwards to free VRAM.  Only one ASR engine occupies the GPU at a time.
+VRAM strategy (unchanged):
+  - Whisper loaded at startup (~6 GB).
+  - VibeVoice (9B, ~18 GB) loaded lazily, unloaded after use.
+  - Nemotron (600M, ~1.2 GB) loaded lazily, stays loaded.
+  - Agent (gemma4:26b) decides engine choice per session.
 """
 import asyncio
-import io
 import json
 import logging
 import os
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydub import AudioSegment
 
 from .transcriber import WhisperTranscriber
 from .vibevoice_transcriber import VibeVoiceTranscriber
@@ -34,9 +35,10 @@ from .nemotron_transcriber import NemotronTranscriber
 from .diarizer import Diarizer
 from .speaker_profiler import SpeakerProfiler
 from .audio_features import AudioFeatureExtractor
-from .translator import translate_segments_to_polish, ollama_available
-from .speaker_identifier import identify_speakers
+from .translator import ollama_available
 from .cache import LRUCache
+from .agent import AgentContext, run_agent, inject_hint, get_active_sessions
+from .memory import list_memories, delete_memory, clear_all_memories
 from . import translator as _translator_mod
 
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +47,7 @@ logger = logging.getLogger(__name__)
 # Help PyTorch avoid VRAM fragmentation when models are swapped
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-app = FastAPI(title="pandaro Transcription Service", version="2.0.0")
+app = FastAPI(title="pandaro Transcription Service", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -80,7 +82,7 @@ async def startup():
     logger.info("Loading Whisper at startup (VibeVoice and Nemotron load lazily on first use)…")
     result = await loop.run_in_executor(_executor, _load_startup_models)
     _whisper, _vibevoice_available, _nemotron_available, _diarizer, _profiler, _audio_features, _gpu_engine = result
-    logger.info("Startup models loaded.")
+    logger.info("Startup models loaded — agent-based pipeline active.")
 
 
 def _load_startup_models():
@@ -310,7 +312,6 @@ def _engine_info(engine: str) -> dict:
 
 @app.get("/cache/info")
 async def cache_info():
-    """Return current LRU cache statistics."""
     return {
         "transcribe": _transcribe_cache.info(),
         "ollama": _translator_mod._ollama_cache.info(),
@@ -321,7 +322,7 @@ async def cache_info():
 async def health():
     return {
         "status": "ok",
-        "model_source": "local (HuggingFace weights)",
+        "version": "3.0.0-agent",
         "engines": {
             "whisper": _engine_info("whisper"),
             "vibevoice": _engine_info("vibevoice"),
@@ -335,7 +336,6 @@ async def health():
 
 @app.get("/engines")
 async def engines_endpoint():
-    """List available engines (Whisper always, VibeVoice if imports OK)."""
     result = []
     if _whisper is not None:
         result.append(_engine_info("whisper"))
@@ -346,8 +346,60 @@ async def engines_endpoint():
     return {"engines": result}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/models")
+async def list_models():
+    """Proxy Ollama /api/tags — returns available model names."""
+    import httpx as _httpx
+    ollama_url = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{ollama_url}/api/tags")
+            data = resp.json()
+        names = [m["name"] for m in (data.get("models") or [])]
+        return {"models": names, "default": os.getenv("OLLAMA_MODEL", "gemma4:26b")}
+    except Exception as exc:
+        return {"models": [], "default": os.getenv("OLLAMA_MODEL", "gemma4:26b"), "error": str(exc)}
 
+
+@app.delete("/cache")
+async def clear_cache_endpoint():
+    """Clear all cached transcription results."""
+    n = _transcribe_cache.clear()
+    return {"cleared": True, "entries_removed": n}
+
+
+@app.get("/sessions")
+async def list_sessions():
+    return {"sessions": get_active_sessions()}
+
+
+@app.post("/session/{session_id}/hint")
+async def inject_session_hint(session_id: str, body: dict):
+    """Inject a human hint into a running agent session."""
+    hint = (body.get("hint") or "").strip()
+    if not hint:
+        return {"accepted": False, "reason": "empty hint"}
+    accepted = inject_hint(session_id, hint)
+    return {"accepted": accepted, "session_id": session_id}
+
+
+@app.get("/memories")
+async def get_memories():
+    return {"memories": list_memories()}
+
+
+@app.delete("/memories/{memory_id}")
+async def delete_memory_endpoint(memory_id: str):
+    return {"deleted": delete_memory(memory_id)}
+
+
+@app.delete("/memories")
+async def clear_memories_endpoint():
+    clear_all_memories()
+    return {"cleared": True}
+
+
+# ── Main transcription endpoint ───────────────────────────────────────────────
 
 @app.post("/transcribe")
 async def transcribe(
@@ -355,52 +407,65 @@ async def transcribe(
     language: Optional[str] = Form(default=None),
     translate: bool = Form(default=True),
     engine: str = Form(default="whisper"),
+    model: Optional[str] = Form(default=None),  # Ollama model override
 ):
+    """
+    Upload audio for agent-driven processing.
+
+    SSE event types streamed:
+      agent_start | agent_thinking | tool_call | tool_result | tool_error |
+      agent_memory | progress | result | error
+    """
     engine = engine.lower().strip()
 
-    # Validate availability (not whether currently loaded on GPU)
-    if engine == "vibevoice":
-        if not _vibevoice_available:
-            async def _err():
-                yield f'data: {{"type":"error","message":"VibeVoice-ASR nie jest dostępny (błąd importu)."}}\n\n'
-            return StreamingResponse(
-                _err(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-    elif engine == "nemotron":
-        if not _nemotron_available:
-            async def _err():
-                yield f'data: {{"type":"error","message":"Nemotron 3.5 ASR nie jest dostępny (NeMo nie zainstalowane)."}}\n\n'
-            return StreamingResponse(
-                _err(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-    else:
-        engine = "whisper"
-        if _whisper is None:
-            async def _err():
-                yield f'data: {{"type":"error","message":"Whisper nie jest dostępny (błąd ładowania)."}}\n\n'
-            return StreamingResponse(
-                _err(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+    if engine == "vibevoice" and not _vibevoice_available:
+        async def _err():
+            yield 'data: {"type":"error","message":"VibeVoice-ASR nie jest dostępny."}\n\n'
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    if engine == "nemotron" and not _nemotron_available:
+        async def _err():
+            yield 'data: {"type":"error","message":"Nemotron 3.5 ASR nie jest dostępny."}\n\n'
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    if engine not in ("vibevoice", "nemotron") and _whisper is None:
+        async def _err():
+            yield 'data: {"type":"error","message":"Whisper nie jest dostępny."}\n\n'
+        return StreamingResponse(_err(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     content = await file.read()
     filename = file.filename or "audio"
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
-    future = loop.run_in_executor(
-        _executor,
-        lambda: _pipeline(content, filename, language, translate, engine, queue, loop),
+    models = {
+        "whisper": _whisper,
+        "vibevoice_loader": _ensure_vibevoice_loaded,
+        "nemotron_loader": _ensure_nemotron_loaded,
+        "ensure_whisper_gpu": _ensure_whisper_on_gpu,
+        "diarizer": _diarizer,
+        "profiler": _profiler,
+        "audio_features": _audio_features,
+        "transcribe_cache": _transcribe_cache,
+        "unload_vibevoice": _unload_vibevoice,
+    }
+
+    ctx = AgentContext(
+        audio_content=content,
+        filename=filename,
+        language_hint=language or None,
+        do_translate=translate,
+        queue=queue,
+        loop=loop,
+        ollama_model=model.strip() if model and model.strip() else None,  # type: ignore[arg-type]
     )
+
+    future = loop.run_in_executor(_executor, lambda: _run_agent_safe(ctx, models))
 
     async def generate():
         try:
             while True:
-                # 30-minute inter-event timeout to handle very long (2h+) recordings.
-                # The pipeline emits a progress event at least every ~15 segments, so
-                # 30 minutes is generous even for the slowest model/hardware combo.
                 event = await asyncio.wait_for(queue.get(), timeout=1800.0)
                 if event is None:
                     break
@@ -408,7 +473,7 @@ async def transcribe(
                 if event.get("type") in ("result", "error"):
                     break
         except asyncio.TimeoutError:
-            yield f'data: {{"type":"error","message":"Timeout — brak aktywności przez 30 minut"}}\n\n'
+            yield 'data: {"type":"error","message":"Timeout \u2014 brak aktywno\u015bci przez 30 minut"}\n\n'
         try:
             await future
         except Exception:
@@ -421,205 +486,17 @@ async def transcribe(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _send(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, event: dict):
-    asyncio.run_coroutine_threadsafe(queue.put(event), loop)
-
-
-def _progress(queue, loop, stage: str, pct: int, msg: str):
-    _send(queue, loop, {"type": "progress", "stage": stage, "progress": pct, "message": msg})
-
-
-def _pipeline(
-    content: bytes,
-    filename: str,
-    language: Optional[str],
-    do_translate: bool,
-    engine: str,
-    queue: asyncio.Queue,
-    loop: asyncio.AbstractEventLoop,
-):
-    import hashlib
-    is_vibevoice = (engine == "vibevoice")
-    is_nemotron = (engine == "nemotron")
-
-    # ── Cache check ─────────────────────────────────────────────────────
-    audio_sha = hashlib.sha256(content).hexdigest()
-    cache_key = _transcribe_cache.key(audio_sha, language, engine, do_translate)
-    cached_result = _transcribe_cache.get(cache_key)
-    if cached_result is not None:
-        _progress(queue, loop, "done", 100, "Wynik z cache (bez ponownego przetwarzania).")
-        _send(queue, loop, {**cached_result, "cached": True})
-        asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-        return
-
-    # Resolve / lazy-load the transcriber inside the executor thread
-    def _prog(pct, msg):
-        _progress(queue, loop, "loading_model" if pct < 15 else "transcribing", pct, msg)
-
-    if is_vibevoice:
-        try:
-            transcriber = _ensure_vibevoice_loaded(progress_cb=_prog)
-        except Exception as exc:
-            logger.exception("VibeVoice load failed during request")
-            _send(queue, loop, {"type": "error", "message": f"Błąd ładowania VibeVoice: {exc}"})
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-            return
-    elif is_nemotron:
-        try:
-            transcriber = _ensure_nemotron_loaded(progress_cb=_prog)
-        except Exception as exc:
-            logger.exception("Nemotron load failed during request")
-            _send(queue, loop, {"type": "error", "message": f"Błąd ładowania Nemotron: {exc}"})
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-            return
-    else:
-        transcriber = _whisper
-        # Ensure Whisper is the active GPU engine
-        _ensure_whisper_on_gpu()
-
+def _run_agent_safe(ctx: AgentContext, models: dict) -> None:
+    """Run the agent; always unload vibevoice on exit."""
     try:
-        # ── 1. Decode audio ─────────────────────────────────────────────────
-        _progress(queue, loop, "decoding", 5, "Dekodowanie audio…")
-        audio, sr = _decode_audio(content, filename)
-        duration = len(audio) / sr
-        _progress(queue, loop, "decoding", 10, f"Czas trwania: {duration:.1f}s")
-
-        # ── 2. Transcribe ────────────────────────────────────────────────────
-        engine_label = "VibeVoice-ASR" if is_vibevoice else f"Whisper {os.getenv('WHISPER_MODEL','large-v3')}"
-        _progress(queue, loop, "loading_model", 12, f"Silnik: {engine_label}…")
-
-        chunks, detected_lang, dur = transcriber.transcribe(
-            audio, language,
-            progress_cb=lambda pct, msg: _progress(queue, loop, "transcribing", pct, msg),
-        )
-
-        if not chunks:
-            raise ValueError("Transkrypcja nie zwróciła żadnych segmentów.")
-
-        _progress(queue, loop, "transcribing", 62, f"Wykryty język: {detected_lang}")
-
-        # ── 3. Diarize (VibeVoice has built-in diarization; others use pyannote) ───
-        if is_vibevoice:
-            _progress(queue, loop, "diarizing", 72, "Diaryzacja wbudowana (VibeVoice).")
-        else:
-            _progress(queue, loop, "diarizing", 65, "Identyfikacja mówców…")
-            chunks = _diarizer.diarize(audio, sr, chunks)
-            _progress(queue, loop, "diarizing", 72, "Zidentyfikowano mówców.")
-
-        # ── 4. Speaker profiling ─────────────────────────────────────────────
-        _progress(queue, loop, "profiling", 74, "Analiza cech mówców (płeć, wiek)…")
-        speaker_profiles_raw = _profiler.profile_speakers(audio, sr, chunks)
-        _progress(queue, loop, "profiling", 78, "Profil głosu gotowy.")
-
-        # ── 5. Audio feature extraction (emotion, speech rate, SNR) ──────────
-        audio_features_raw: dict = {}
-        if _audio_features and _audio_features.loaded_extractors:
-            _progress(queue, loop, "profiling", 79, f"Ekstrakcja cech audio ({', '.join(_audio_features.loaded_extractors)})…")
-            try:
-                audio_features_raw = _audio_features.extract_per_speaker(audio, sr, chunks)
-            except Exception as exc:
-                logger.warning(f"Audio feature extraction failed: {exc}")
-        _progress(queue, loop, "profiling", 80, "Analiza gotowa.")
-
-        # ── 5. Translate to Polish ───────────────────────────────────────────
-        if do_translate and detected_lang != "pl":
-            _progress(queue, loop, "translating", 82, "Tłumaczenie na polski (via Ollama)…")
-            chunks = translate_segments_to_polish(chunks, detected_lang)
-            _progress(queue, loop, "translating", 92, "Tłumaczenie gotowe.")
-        else:
-            for c in chunks:
-                c["text_pl"] = c["text"]
-
-        # ── 6. Identify speakers (name extraction via LLM + gender fallback) ──
-        _progress(queue, loop, "identifying", 94, "Identyfikacja mówców (LLM)…")
-        try:
-            display_names = identify_speakers(chunks, speaker_profiles_raw)
-            logger.info(f"Speaker names identified: {display_names}")
-        except Exception as exc:
-            logger.warning(f"Speaker identification failed: {exc}")
-            display_names = {}
-
-        # ── 7. Build result ──────────────────────────────────────────────────
-        segments = [
-            {
-                "id": i,
-                "start": c["start"],
-                "end": c["end"],
-                "text": c["text"],
-                "text_pl": c.get("text_pl") or c["text"],
-                "speaker": c["speaker"],
-                "language": detected_lang,
-                "words": c.get("words") or [],
-            }
-            for i, c in enumerate(chunks)
-        ]
-
-        speaker_profiles = {
-            sp: {
-                "gender": p.get("gender"),
-                "gender_probs": p.get("gender_probs"),
-                "age_estimate": p.get("age_estimate"),
-                "age_group": p.get("age_group"),
-                "confidence": p.get("confidence"),
-                "display_name": display_names.get(sp),
-                # merge audio features (emotion, speech_rate, snr, …)
-                **audio_features_raw.get(sp, {}),
-            }
-            for sp, p in speaker_profiles_raw.items()
-        }
-
-        _progress(queue, loop, "done", 100, "Gotowe!")
-        result_event = {
-            "type": "result",
-            "segments": segments,
-            "detected_language": detected_lang,
-            "duration": dur,
-            "speaker_profiles": speaker_profiles,
-            "model_used": (
-                os.getenv("VIBEVOICE_MODEL", "microsoft/VibeVoice-ASR")
-                if is_vibevoice
-                else os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-asr-streaming-0.6b")
-                if is_nemotron
-                else os.getenv("WHISPER_MODEL", "large-v3")
-            ),
-            "asr_engine": engine,
-        }
-        _transcribe_cache.put(cache_key, result_event)
-        _send(queue, loop, result_event)
-
+        run_agent(ctx, models)
     except Exception as exc:
-        logger.exception("Pipeline error")
-        _send(queue, loop, {"type": "error", "message": str(exc)})
+        logger.exception("Agent top-level error: %s", exc)
+        asyncio.run_coroutine_threadsafe(
+            ctx.queue.put({"type": "error", "message": str(exc)}),
+            ctx.loop,
+        )
+        asyncio.run_coroutine_threadsafe(ctx.queue.put(None), ctx.loop)
     finally:
-        # Always unload VibeVoice after use to free VRAM for other models/tasks.
-        # Nemotron stays loaded (small model, ~1.2 GB) — no explicit unload needed.
-        if is_vibevoice:
+        if ctx.asr_engine == "vibevoice":
             _unload_vibevoice()
-        asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _decode_audio(content: bytes, filename: str) -> tuple[np.ndarray, int]:
-    """Convert any audio format to 16 kHz mono float32."""
-    TARGET_SR = 16_000
-    try:
-        audio_seg = AudioSegment.from_file(io.BytesIO(content))
-    except Exception:
-        suffix = os.path.splitext(filename)[1] or ".bin"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-            f.write(content)
-            tmp_path = f.name
-        try:
-            audio_seg = AudioSegment.from_file(tmp_path)
-        finally:
-            os.unlink(tmp_path)
-
-    audio_seg = audio_seg.set_channels(1).set_frame_rate(TARGET_SR)
-    samples = np.array(audio_seg.get_array_of_samples(), dtype=np.float32)
-    samples = samples / (2 ** (audio_seg.sample_width * 8 - 1))
-    return samples, TARGET_SR

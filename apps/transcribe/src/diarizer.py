@@ -11,7 +11,7 @@ proceed.
 import os
 import logging
 import tempfile
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import soundfile as sf
@@ -104,13 +104,14 @@ class Diarizer:
         audio: np.ndarray,
         sr: int,
         chunks: List[Dict[str, Any]],
+        num_speakers: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Assigns 'speaker' field to each chunk. Returns annotated chunks."""
         if not chunks:
             return chunks
 
         if self._method == "pyannote":
-            return self._diarize_pyannote(audio, sr, chunks)
+            return self._diarize_pyannote(audio, sr, chunks, num_speakers=num_speakers)
 
         logger.warning(
             "pyannote not available — using energy heuristic for speaker assignment."
@@ -118,12 +119,88 @@ class Diarizer:
         return self._diarize_energy(audio, sr, chunks)
 
     # ------------------------------------------------------------------
-    def _diarize_pyannote(self, audio: np.ndarray, sr: int, chunks: List[Dict[str, Any]]):
+    def _split_at_boundaries(
+        self,
+        chunks: List[Dict[str, Any]],
+        turns: List[tuple],
+    ) -> List[Dict[str, Any]]:
         """
-        Assign speakers using overlap-coverage — for each segment, pick the
-        speaker whose turns cover the most of that segment's duration.
-        This is significantly more accurate than midpoint assignment near
-        speaker boundaries and for short segments.
+        Split ASR chunks at pyannote speaker-turn boundaries.
+
+        A single Whisper segment spanning two speakers is broken at the midpoint
+        of the silence gap between the two pyannote turns.  When the chunk has
+        word-level timestamps (``words`` field), each sub-segment gets only the
+        words that fall within its time window; otherwise the full text stays
+        on the first sub-segment and later pieces are empty.
+
+        Slivers shorter than MIN_SLIVER_SEC (100 ms) are silently discarded.
+        """
+        MIN_SLIVER_SEC = 0.1
+
+        if len(turns) < 2:
+            return chunks
+
+        # Cut point = midpoint of the gap between consecutive turns
+        split_times = sorted(
+            (turns[i][1] + turns[i + 1][0]) / 2.0
+            for i in range(len(turns) - 1)
+        )
+
+        result: List[Dict[str, Any]] = []
+        for chunk in chunks:
+            c_start, c_end = chunk["start"], chunk["end"]
+            inner = [t for t in split_times if c_start < t < c_end]
+
+            if not inner:
+                result.append(chunk)
+                continue
+
+            words: list = chunk.get("words") or []
+            split_points = [c_start] + inner + [c_end]
+
+            for j in range(len(split_points) - 1):
+                seg_start = split_points[j]
+                seg_end = split_points[j + 1]
+
+                if seg_end - seg_start < MIN_SLIVER_SEC:
+                    continue
+
+                sub_words = [
+                    w for w in words
+                    if seg_start <= w.get("start", 0.0) < seg_end
+                ]
+
+                if sub_words:
+                    text = " ".join(w.get("word", "").strip() for w in sub_words).strip()
+                elif j == 0:
+                    text = chunk["text"]  # fallback: keep full text on first piece
+                else:
+                    text = ""
+
+                if not text.strip() and j > 0:
+                    continue  # drop empty trailing pieces
+
+                result.append({
+                    **chunk,
+                    "start": seg_start,
+                    "end": seg_end,
+                    "text": text,
+                    "words": sub_words,
+                })
+
+        return result
+
+    # ------------------------------------------------------------------
+    def _diarize_pyannote(self, audio: np.ndarray, sr: int, chunks: List[Dict[str, Any]], num_speakers: Optional[int] = None):
+        """
+        Four-pass speaker assignment:
+
+        1. Split ASR chunks at pyannote turn boundaries.
+        2. Assign each sub-segment to the speaker whose turns cover the most
+           of its duration. Silence gaps carry forward the last known speaker.
+        3. Re-number speaker labels by total speaking time (dominant → GŁOS_01).
+        4. Short-segment cleanup: re-assign segments < 1.0s using majority vote
+           from 5 nearest neighbours to fix mis-assigned whispers/interjections.
         """
         import tempfile, os
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -131,7 +208,10 @@ class Diarizer:
             tmp_path = f.name
 
         try:
-            result = self._pipeline(tmp_path)
+            diarize_kwargs = {}
+            if num_speakers and num_speakers > 0:
+                diarize_kwargs["num_speakers"] = num_speakers
+            result = self._pipeline(tmp_path, **diarize_kwargs)
         finally:
             try:
                 os.unlink(tmp_path)
@@ -153,37 +233,100 @@ class Diarizer:
             for turn, _, speaker in annotation.itertracks(yield_label=True)
         ]
 
+        # Pass 1 — split chunks at turn boundaries
+        chunks = self._split_at_boundaries(chunks, turns)
+
+        # Pass 2 — assign speakers via overlap-coverage
         speaker_map: Dict[str, str] = {}
         counter = 0
+        last_speaker: Optional[str] = None
+        speaking_time: Dict[str, float] = {}  # label → total seconds spoken
 
         for chunk in chunks:
             seg_start = chunk["start"]
             seg_end = chunk["end"]
             seg_dur = max(seg_end - seg_start, 1e-6)
 
-            # Accumulate overlap seconds per raw speaker id
+            # Accumulate overlap seconds per raw pyannote speaker id
             coverage: Dict[str, float] = {}
             for t_start, t_end, sp in turns:
                 overlap = min(seg_end, t_end) - max(seg_start, t_start)
                 if overlap > 0:
                     coverage[sp] = coverage.get(sp, 0.0) + overlap
 
+            assigned: Optional[str] = None
             if coverage:
-                # Pick the speaker with the most overlap
                 best_raw = max(coverage, key=lambda k: coverage[k])
-                # Only assign if coverage ≥ 5% of segment duration (avoid noise)
-                if coverage[best_raw] / seg_dur >= 0.05:
+                # Short segments (<0.5s) need lower threshold — single words/interjections
+                # barely overlap any pyannote turn
+                min_ratio = 0.01 if seg_dur < 0.5 else 0.05
+                if coverage[best_raw] / seg_dur >= min_ratio:
                     if best_raw not in speaker_map:
                         counter += 1
                         speaker_map[best_raw] = f"GŁOS_{counter:02d}"
-                    chunk["speaker"] = speaker_map[best_raw]
-                    continue
+                    assigned = speaker_map[best_raw]
 
-            # Fallback: no turn covers this segment (silence gap)
-            chunk["speaker"] = "GŁOS_01"
+            # Carry forward the last real speaker for silence/low-coverage gaps
+            if assigned is None:
+                assigned = last_speaker if last_speaker is not None else "GŁOS_01"
+
+            chunk["speaker"] = assigned
+            last_speaker = assigned
+            speaking_time[assigned] = speaking_time.get(assigned, 0.0) + seg_dur
+
+        # Pass 3 — re-number by speaking time (most speech → GŁOS_01)
+        if speaking_time:
+            sorted_by_time = sorted(
+                speaking_time, key=speaking_time.__getitem__, reverse=True
+            )
+            renumber: Dict[str, str] = {
+                sp: f"GŁOS_{i + 1:02d}" for i, sp in enumerate(sorted_by_time)
+            }
+            for chunk in chunks:
+                chunk["speaker"] = renumber.get(chunk["speaker"], chunk["speaker"])
 
         n_speakers = len(speaker_map)
-        logger.info(f"pyannote diarization: {n_speakers} speaker(s) detected")
+        logger.info(
+            f"pyannote diarization: {n_speakers} speaker(s) detected, "
+            f"{len(chunks)} segments after boundary splitting"
+        )
+
+        # Pass 4 — Short-segment cleanup via neighbourhood majority vote
+        # Segments shorter than 1.0 s are easy to mis-assign, especially
+        # for brief affirmations ("tak", "nie", "mhm") or cross-talk snippets.
+        SHORT_THRESH = 1.0
+        WINDOW = 3  # look ±3 neighbours
+        for i, chunk in enumerate(chunks):
+            dur = chunk["end"] - chunk["start"]
+            if dur >= SHORT_THRESH:
+                continue
+            start_j = max(0, i - WINDOW)
+            end_j = min(len(chunks), i + WINDOW + 1)
+            neighbours = [chunks[j]["speaker"] for j in range(start_j, end_j) if j != i]
+            if not neighbours:
+                continue
+            from collections import Counter as _Counter
+            top_sp, top_cnt = _Counter(neighbours).most_common(1)[0]
+            # Re-assign only when there is a clear majority (≥ half of visible neighbours)
+            if top_cnt >= max(2, len(neighbours) // 2):
+                chunk["speaker"] = top_sp
+
+        # Pass 5 — Merge micro-gaps between same-speaker runs
+        # If two consecutive same-speaker segments are separated by < 0.25 s of
+        # silence (and the gap is from an empty/missing chunk), extend the first.
+        MIN_GAP = 0.25
+        merged: List[Dict[str, Any]] = []
+        for chunk in chunks:
+            if (merged
+                    and merged[-1]["speaker"] == chunk["speaker"]
+                    and chunk["start"] - merged[-1]["end"] < MIN_GAP
+                    and not (chunk.get("text") or "").strip()):
+                # Swallow empty bridging chunk
+                merged[-1]["end"] = chunk["end"]
+            else:
+                merged.append(chunk)
+        chunks = merged
+
         return chunks
 
     # ------------------------------------------------------------------

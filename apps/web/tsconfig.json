@@ -10,7 +10,9 @@
     "strict": true,
     "skipLibCheck": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@pandaro/shared-types": ["../../packages/shared-types/src/index.ts"],
+      "@pandaro/shared-types/*": ["../../packages/shared-types/src/*"]
     }
   },
   "include": ["src"],

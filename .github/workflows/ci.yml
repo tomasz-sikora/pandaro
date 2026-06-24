@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 jobs:
+  # ── TypeScript frontend ──────────────────────────────────────────────────────
   typecheck-and-build:
     name: Type Check & Build
     runs-on: ubuntu-latest
@@ -26,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
+      - name: Type check (lint)
         run: pnpm --filter @pandaro/web lint
 
       - name: Build web
@@ -35,6 +36,52 @@ jobs:
       - name: Build proxy
         run: pnpm --filter @pandaro/proxy build
 
+  # ── Python backend ───────────────────────────────────────────────────────────
+  python:
+    name: Python (syntax + unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/transcribe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          pip install --quiet \
+            pytest \
+            httpx \
+            pytest-mock \
+            fastapi \
+            pydub \
+            numpy
+
+      - name: Syntax-check all source modules
+        run: |
+          python -m py_compile \
+            src/__init__.py \
+            src/agent.py \
+            src/cache.py \
+            src/diarizer.py \
+            src/main.py \
+            src/memory.py \
+            src/transcriber.py \
+            src/translator.py \
+            src/speaker_identifier.py \
+            src/audio_features.py \
+            src/speaker_profiler.py
+          echo "✓ All Python files pass syntax check"
+
+      - name: Run unit tests
+        run: python -m pytest tests/test_translator.py -v --tb=short
+
+  # ── Docker images ────────────────────────────────────────────────────────────
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -63,3 +110,18 @@ jobs:
           tags: pandaro-proxy:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build transcribe image (CPU-only, no model preload)
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/transcribe
+          file: apps/transcribe/Dockerfile
+          push: false
+          tags: pandaro-transcribe:ci
+          build-args: |
+            PRELOAD_MODELS=false
+            DOWNLOAD_VIBEVOICE=false
+            SKIP_FLASH_ATTN=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+

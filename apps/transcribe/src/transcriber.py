@@ -84,7 +84,14 @@ class WhisperTranscriber:
         language: Optional[str],
         progress_cb: Callable[[int, str], None],
         with_alternatives: bool = True,
+        extra_kw: Optional[Dict[str, Any]] = None,
+        on_segments_cb: Optional[Callable[[List[Dict[str, Any]], float], None]] = None,
     ) -> tuple[List[Dict[str, Any]], str, float]:
+        """Returns (chunks, detected_language, duration).
+
+        on_segments_cb(chunk_segs, offset_sec) is called after each audio chunk
+        so callers can stream results progressively.
+        """
         """Returns (chunks, detected_language, duration)."""
         if self.model is None:
             self.reload_to_gpu()
@@ -144,12 +151,22 @@ class WhisperTranscriber:
                 # VAD — threshold 0.3 keeps quiet phone-call audio (was 0.45)
                 "vad_filter": True,
                 "vad_parameters": {
-                    "threshold": 0.3,
+                    "threshold": 0.25,
                     "min_silence_duration_ms": 400,
-                    "min_speech_duration_ms": 150,
-                    "speech_pad_ms": 200,
+                    "min_speech_duration_ms": 100,
+                    "speech_pad_ms": 100,
                 },
             }
+            # Agent-tuned parameter overrides (merged after defaults)
+            if extra_kw:
+                vad_threshold = extra_kw.pop("vad_filter_threshold", None)
+                if vad_threshold is not None:
+                    kw["vad_parameters"]["threshold"] = float(vad_threshold)
+                kw.update({k: v for k, v in extra_kw.items() if k in (
+                    "beam_size", "best_of", "temperature",
+                    "no_speech_threshold", "compression_ratio_threshold",
+                    "condition_on_previous_text", "vad_filter",
+                )})
             if language and language != "auto":
                 kw["language"] = language
             # Seed only the FIRST window with cross-chunk context (no cascade risk)
@@ -213,6 +230,12 @@ class WhisperTranscriber:
                     )
 
             initial_prompt = " ".join(s["text"] for s in chunk_segs[-3:])[:120] if chunk_segs else None
+
+            if on_segments_cb and chunk_segs:
+                try:
+                    on_segments_cb(chunk_segs, offset_sec)
+                except Exception as _cb_exc:
+                    logger.debug("on_segments_cb error (ignored): %s", _cb_exc)
 
             all_chunks.extend(chunk_segs)
             logger.info(

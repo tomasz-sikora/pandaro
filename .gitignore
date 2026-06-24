@@ -7,3 +7,10 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/

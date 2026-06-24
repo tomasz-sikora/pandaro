@@ -10,7 +10,7 @@ interface SettingsStore {
 const defaults: Settings = {
   transcribeUrl: '/transcribe',
   ollamaUrl: '/ollama',
-  ollamaModel: 'ministral-3:14b',
+  ollamaModel: 'gemma4:26b',
   ollamaEmbeddingModel: 'embeddinggemma',
   useOllamaEmbeddings: true,
   whisperModel: 'large-v3',

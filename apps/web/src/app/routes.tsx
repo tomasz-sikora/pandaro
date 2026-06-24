@@ -8,6 +8,7 @@ const AnalysisPage = lazy(() => import('../features/analysis/AnalysisPage'))
 const ChatPage = lazy(() => import('../features/chat/ChatPage'))
 const SearchPage = lazy(() => import('../features/search/SearchPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
+const AgentLogPage = lazy(() => import('../features/agent-log/AgentLogPage'))
 
 function LoadingSpinner() {
   return (
@@ -66,6 +67,14 @@ export function AppRoutes() {
           element={
             <Suspense fallback={<LoadingSpinner />}>
               <SettingsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/agent-log"
+          element={
+            <Suspense fallback={<LoadingSpinner />}>
+              <AgentLogPage />
             </Suspense>
           }
         />

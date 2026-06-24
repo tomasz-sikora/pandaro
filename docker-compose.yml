@@ -24,7 +24,9 @@ services:
       - VIBEVOICE_MODEL=${VIBEVOICE_MODEL:-microsoft/VibeVoice-ASR}
       - VIBEVOICE_LM=${VIBEVOICE_LM:-Qwen/Qwen2.5-7B}
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral-3:14b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma4:26b}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - AGENT_MEMORY_PATH=/app/data/memories.json
       - HF_TOKEN=${HF_TOKEN:-}
       # Point HuggingFace and Torch caches to volume-backed paths
       - HF_HOME=/app/models/hf
@@ -34,6 +36,7 @@ services:
       # VibeVoice-ASR (~18 GB) and Whisper weights are cached here.
       - hf_cache:/app/models/hf
       - torch_cache:/app/models/torch
+      - agent_data:/app/data
     expose:
       - "8000"
     networks:
@@ -100,3 +103,4 @@ networks:
 volumes:
   hf_cache:
   torch_cache:
+  agent_data:     # Persists agent skill memories across restarts

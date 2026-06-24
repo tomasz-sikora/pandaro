@@ -69,3 +69,11 @@ class LRUCache:
                 "entries": len(self._data),
                 "maxsize": self._maxsize,
             }
+
+    def clear(self) -> int:
+        """Remove all entries. Returns the number removed."""
+        with self._lock:
+            n = len(self._data)
+            self._data.clear()
+            logger.info(f"[{self._name}] cache CLEARED ({n} entries removed)")
+            return n

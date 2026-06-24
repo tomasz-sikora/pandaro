@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Tag, Users, Building2, MapPin, Calendar, FileText, AlertCircle, UserCircle2 } from 'lucide-react'
+import { Tag, Users, Building2, MapPin, Calendar, FileText, AlertCircle, UserCircle2, Quote } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useSessionStore } from '../../store/sessionStore'
@@ -124,7 +124,7 @@ export default function AnalysisPage() {
 
   if (!session) return null
 
-  const { entities, report, summary, speakerProfiles } = session
+  const { entities, report, summary, speakerProfiles, quotesAndFacts, topics } = session
   const profileEntries = Object.entries(speakerProfiles ?? {})
 
   const noData = !entities && !report && !summary && profileEntries.length === 0
@@ -146,6 +146,78 @@ export default function AnalysisPage() {
               <p className="text-sm text-amber-700 mt-0.5">
                 Analiza LLM wymaga działającego Ollamy. Skonfiguruj URL w Ustawieniach.
               </p>
+            </div>
+          </div>
+        )}
+
+        {/* Quotes and facts */}
+        {quotesAndFacts && quotesAndFacts.quotes.length > 0 && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-slate-700">
+              <Quote className="w-4 h-4 text-brand-600" />
+              Kluczowe cytaty
+            </div>
+            <div className="space-y-3">
+              {quotesAndFacts.quotes.map((q, i) => (
+                <blockquote key={i} className="border-l-2 border-brand-300 pl-3 py-0.5">
+                  <p className="text-sm text-slate-800 italic">„{q.text}"</p>
+                  <footer className="text-xs text-slate-500 mt-1">
+                    {q.speaker}
+                    {q.timestamp && <span className="ml-1 text-slate-400">@ {q.timestamp}</span>}
+                    {q.significance && <span className="ml-2 text-brand-600">— {q.significance}</span>}
+                  </footer>
+                </blockquote>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Facts / decisions */}
+        {quotesAndFacts && (quotesAndFacts.facts.length > 0 || quotesAndFacts.decisions.length > 0) && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+            {quotesAndFacts.facts.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Fakty</p>
+                <ul className="space-y-1">
+                  {quotesAndFacts.facts.map((f, i) => (
+                    <li key={i} className="text-sm text-slate-700 flex gap-2">
+                      <span className="text-slate-400 shrink-0">{f.speaker}:</span>
+                      <span>{f.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {quotesAndFacts.decisions.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mt-2">Decyzje i ustalenia</p>
+                <ul className="space-y-1 list-disc pl-4">
+                  {quotesAndFacts.decisions.map((d, i) => (
+                    <li key={i} className="text-sm text-slate-700">{d.text}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Topics timeline */}
+        {topics && topics.length > 0 && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Tematy</p>
+            <div className="space-y-1.5">
+              {topics.map((t, i) => {
+                const startMin = Math.floor(t.start_sec / 60)
+                const startSec = Math.floor(t.start_sec % 60)
+                return (
+                  <div key={i} className="flex items-baseline gap-3 text-sm">
+                    <span className="text-xs text-slate-400 font-mono shrink-0">
+                      {startMin}:{startSec.toString().padStart(2, '0')}
+                    </span>
+                    <span className="text-slate-700">{t.topic}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
